@@ -71,6 +71,24 @@ function currentWire(
 }
 
 describe("trusted current Codex environment envelope", () => {
+  test("accepts a Windows-host environment while the bridge runs on another OS", () => {
+    // The Docker bridge is Linux while Codex on the user's machine is Windows,
+    // so the environment paths carry the Codex host's flavor.
+    const windowsRoot = "E:\\Projects\\demo";
+    const windowsEnvironmentXml = `<environment_context>
+  <cwd>${windowsRoot}</cwd>
+  <filesystem><workspace_roots><root>${windowsRoot}</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>`;
+    const wire = currentWire({ workspace: windowsRoot, environmentXml: windowsEnvironmentXml });
+    expect(extractChatGptTurnEnvironment(wire)).toEqual({
+      cwd: windowsRoot,
+      roots: [windowsRoot],
+      writableRoots: [windowsRoot],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [],
+    });
+  });
+
   test("accepts the v0.146 split envelope when workspace and sandbox metadata agree", () => {
     expect(extractChatGptTurnEnvironment(currentWire())).toEqual({
       cwd: root,

@@ -1,4 +1,9 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import {
+  isAbsoluteCrossPlatform as isAbsolute,
+  pathIdentityCrossPlatform,
+  pathsMatchCrossPlatform as matchesPath,
+  resolveCrossPlatform,
+} from "./cross-platform-paths";
 import { isReadableCompactionSummaryText, OPAQUE_COMPACTION_NOTE } from "../../responses/compaction";
 import type { CodexContentPart, CodexParsedRequest, CodexTool } from "../../types";
 
@@ -44,10 +49,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function pathIdentity(value: string): string {
-  const normalized = resolve(value);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
+const pathIdentity = pathIdentityCrossPlatform;
 
 function clientTurnMetadata(parsed: CodexParsedRequest): Record<string, unknown> | undefined {
   const body = record(parsed._rawBody);
@@ -445,15 +447,10 @@ function uniqueAbsolutePaths(values: string[], field: string): string[] {
   if (decoded.length === 0) throw new MissingTrustedCodexEnvironmentError(field);
   if (decoded.some(path => !isAbsolute(path))) throw new Error(`ChatGPT web ${field} must contain absolute paths`);
   const unique = new Map<string, string>();
-  for (const path of decoded.map(value => resolve(value))) {
+  for (const path of decoded.map(value => resolveCrossPlatform(value))) {
     if (!unique.has(pathIdentity(path))) unique.set(pathIdentity(path), path);
   }
   return [...unique.values()];
-}
-
-function matchesPath(root: string, path: string): boolean {
-  const rel = relative(pathIdentity(root), pathIdentity(path));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 export function extractChatGptTurnEnvironment(parsed: CodexParsedRequest): ChatGptTurnEnvironment {

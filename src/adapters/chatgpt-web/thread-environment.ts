@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
 import { atomicWriteFile } from "../../config";
+import {
+  isAbsoluteCrossPlatform as isAbsolute,
+  pathIdentityCrossPlatform as pathIdentity,
+  pathsMatchCrossPlatform as contains,
+  resolveCrossPlatform,
+} from "./cross-platform-paths";
 import type { CodexParsedRequest } from "../../types";
 import {
   extractChatGptTurnEnvironment,
@@ -32,22 +37,12 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function pathIdentity(value: string): string {
-  const normalized = resolve(value);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function contains(root: string, path: string): boolean {
-  const rel = relative(pathIdentity(root), pathIdentity(path));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
 function absolutePaths(value: unknown, field: string): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.some(path => typeof path !== "string" || !isAbsolute(path))) {
     throw new Error(`Invalid persisted ChatGPT thread ${field}`);
   }
   const unique = new Map<string, string>();
-  for (const path of value.map(path => resolve(path as string))) {
+  for (const path of value.map(path => resolveCrossPlatform(path as string))) {
     if (!unique.has(pathIdentity(path))) unique.set(pathIdentity(path), path);
   }
   return [...unique.values()];
@@ -82,7 +77,7 @@ function validateStoredEnvironment(value: unknown): StoredThreadEnvironment {
   if (!parsed || typeof parsed.cwd !== "string" || !isAbsolute(parsed.cwd) || typeof parsed.updatedAt !== "number") {
     throw new Error("Invalid persisted ChatGPT thread environment");
   }
-  const cwd = resolve(parsed.cwd);
+  const cwd = resolveCrossPlatform(parsed.cwd);
   const roots = absolutePaths(parsed.roots, "roots");
   const writableRoots = Array.isArray(parsed.writableRoots) && parsed.writableRoots.length === 0
     ? []
