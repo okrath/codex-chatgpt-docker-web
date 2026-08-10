@@ -19,6 +19,10 @@ mkdir -p "$CODEX_HOME"
 APP_HOME="${CODEX_CHATGPT_WEB_HOME:-$HOME/.codex-chatgpt-web}"
 CONFIG_PATH="$APP_HOME/config.json"
 
+# A container restart preserves /tmp, and Xvfb refuses to start over the stale
+# lock left by the previous process tree.
+rm -f "/tmp/.X${DISPLAY#:}-lock" "/tmp/.X11-unix/X${DISPLAY#:}"
+
 echo "[docker] starting virtual display $DISPLAY (${SCREEN_GEOMETRY})"
 Xvfb "$DISPLAY" -screen 0 "$SCREEN_GEOMETRY" -nolisten tcp &
 

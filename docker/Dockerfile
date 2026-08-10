@@ -39,9 +39,13 @@ RUN printf '#!/bin/sh\nexec bun /app/src/cli.ts "$@"\n' > /usr/local/bin/codex-c
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
 
+# XDG state must live inside the persistent app-home volume: the tunnel-client
+# keeps its runtime alias registry and health files there, and they must survive
+# container recreation.
 ENV DISPLAY=:99 \
     CODEX_CHATGPT_WEB_EXTERNAL_SUPERVISOR=1 \
-    CODEX_HOME=/data/codex
+    CODEX_HOME=/data/codex \
+    XDG_STATE_HOME=/root/.codex-chatgpt-web/xdg-state
 
 # 8300: externally reachable forwarder to the loopback-only Responses bridge.
 # 7900: noVNC page used to watch the Chromium screen and complete ChatGPT sign-in.
