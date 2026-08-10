@@ -718,6 +718,7 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) closeCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               const failure = adapterFailureFromEvent(event);
+              console.error(`[chatgpt-web] turn failed: ${failure.error.message}`);
               emit("response.failed", {
                 response: {
                   ...responseSnapshot("failed", finishedItems),
@@ -745,6 +746,7 @@ export function bridgeToResponsesSSE(
         if (!terminated) {
           flushHiddenRawReasoning();
           if (currentWebSearch) closeCurrentWebSearch("failed", []);
+          console.error(`[chatgpt-web] turn pipeline error: ${err instanceof Error ? err.message : String(err)}`);
           emit("response.failed", {
             response: {
               ...responseSnapshot("failed", finishedItems),
