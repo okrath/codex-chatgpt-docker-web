@@ -207,76 +207,58 @@ function messageText(message: CodexMessage): string {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
-const LUNA_TRIM_MIN_TOKENS = 64;
-export const LUNA_KEEP_RECENT_TOOL_RESULTS = 4;
+const LUNA_COLLAPSE_MIN_TOKENS = 16;
 export const LUNA_KEEP_RECENT_MESSAGES = 8;
 
-/**
- * Replace the contents of older tool results with a short note. Results that
- * arrived after the last assistant answer belong to the current round and are
- * never touched, and the most recent completed ones are kept verbatim.
- */
-export function trimOldLunaToolResults(
-  messages: readonly CodexMessage[],
-  modelId?: string,
-  keepRecent = LUNA_KEEP_RECENT_TOOL_RESULTS,
-): { messages: CodexMessage[]; trimmedCount: number; estTokensRemoved: number } | undefined {
-  const protectedFrom = currentRoundStartIndex(messages);
-  const completedToolResults = messages.flatMap((message, index) =>
-    message.role === "toolResult" && index < protectedFrom ? [index] : []
-  );
-  const trimmable = completedToolResults.slice(0, Math.max(0, completedToolResults.length - keepRecent));
-  if (trimmable.length === 0) return undefined;
-  let estTokensRemoved = 0;
-  let trimmedCount = 0;
-  const next = [...messages];
-  for (const index of trimmable) {
-    const message = next[index]!;
-    const tokens = estimateTokens(messageText(message), modelId);
-    if (tokens < LUNA_TRIM_MIN_TOKENS) continue;
-    estTokensRemoved += tokens;
-    trimmedCount += 1;
-    next[index] = {
-      ...message,
-      content: `[trimmed by the bridge: older tool result (~${tokens.toLocaleString("en-US")} tokens) removed to fit the ChatGPT Free browser transport budget]`,
-    } as CodexMessage;
-  }
-  if (trimmedCount === 0) return undefined;
-  return { messages: next, trimmedCount, estTokensRemoved };
-}
+const LUNA_COLLAPSE_MARKER_PREFIX = "[bridge removed";
 
 /**
- * Last resort for very long threads: elide the contents of older user,
- * assistant, and tool-result history. The most recent messages are kept
- * verbatim. Developer messages (contracts, skill instructions) are kept by
- * default, and only elided when `elideDevelopers` is set for the deepest
- * escalation step — the turn's trusted environment is resolved separately and
- * cached per thread, so eliding contract text here does not break full mode.
+ * Remove older history outright and replace the whole removed span with a
+ * single marker message, instead of leaving one placeholder per message — a
+ * very long thread has hundreds of history items, and one short note each still
+ * sums to tens of thousands of tokens. The most recent `keepRecent` messages
+ * and the in-flight round (everything after the last assistant answer) are kept
+ * verbatim. Developer messages are kept unless `collapseDevelopers` is set for
+ * the deepest escalation step — the turn's trusted environment is resolved and
+ * cached separately, so collapsing contract text here does not break full mode.
  */
-export function elideOldLunaHistory(
+export function collapseOldLunaHistory(
   messages: readonly CodexMessage[],
   modelId?: string,
   keepRecent = LUNA_KEEP_RECENT_MESSAGES,
-  elideDevelopers = false,
-): { messages: CodexMessage[]; elidedCount: number; estTokensRemoved: number } | undefined {
+  collapseDevelopers = false,
+): { messages: CodexMessage[]; collapsedCount: number; estTokensRemoved: number } | undefined {
   const cutoff = Math.min(Math.max(0, messages.length - keepRecent), currentRoundStartIndex(messages));
+  if (cutoff <= 0) return undefined;
+  const head: CodexMessage[] = [];
+  let collapsedCount = 0;
   let estTokensRemoved = 0;
-  let elidedCount = 0;
-  const next = messages.map((message, index) => {
-    if (index >= cutoff) return message;
-    if (message.role === "developer" && !elideDevelopers) return message;
-    const tokens = estimateTokens(messageText(message), modelId);
-    if (tokens < LUNA_TRIM_MIN_TOKENS) return message;
-    estTokensRemoved += tokens;
-    elidedCount += 1;
-    const note = `[trimmed by the bridge: older task history (~${tokens.toLocaleString("en-US")} tokens) removed to fit the ChatGPT Free browser transport budget]`;
-    if (message.role === "assistant") {
-      return { ...message, content: [{ type: "text", text: note }] } as CodexMessage;
+  for (let index = 0; index < cutoff; index += 1) {
+    const message = messages[index]!;
+    if (message.role === "developer" && !collapseDevelopers) {
+      head.push(message);
+      continue;
     }
-    return { ...message, content: note } as CodexMessage;
-  });
-  if (elidedCount === 0) return undefined;
-  return { messages: next, elidedCount, estTokensRemoved };
+    const text = messageText(message);
+    // A prior step's marker is tiny; fold it into the new one without counting.
+    if (typeof message.content === "string" && message.content.startsWith(LUNA_COLLAPSE_MARKER_PREFIX)) {
+      continue;
+    }
+    if (estimateTokens(text, modelId) < LUNA_COLLAPSE_MIN_TOKENS) {
+      head.push(message);
+      continue;
+    }
+    collapsedCount += 1;
+    estTokensRemoved += estimateTokens(text, modelId);
+  }
+  if (collapsedCount === 0) return undefined;
+  const marker: CodexMessage = {
+    role: "user",
+    content: `${LUNA_COLLAPSE_MARKER_PREFIX} ${collapsedCount.toLocaleString("en-US")} older message(s)`
+      + ` (~${estTokensRemoved.toLocaleString("en-US")} tokens) to fit the ChatGPT Free browser transport budget]`,
+    timestamp: 0,
+  };
+  return { messages: [...head, marker, ...messages.slice(cutoff)], collapsedCount, estTokensRemoved };
 }
 
 export interface LunaBudgetedCompilation {
@@ -288,18 +270,17 @@ export interface LunaBudgetedCompilation {
   estimatedTokens: number;
   removedSections: LunaSlimmedSection[];
   condensedTokens: number;
-  trimmedToolResults: number;
-  trimmedToolResultTokens: number;
-  elidedMessages: number;
-  elidedMessageTokens: number;
+  collapsedMessages: number;
+  collapsedTokens: number;
 }
 
 /**
  * Compile a browser prompt under the ChatGPT Free transport budget. Luna turns
  * always shed the harness-only rule sections; when the turn still exceeds the
- * budget the pipeline escalates: condense remaining rule sections → trim older
- * tool results → elide older history. Non-Luna models and compaction turns
- * compile untouched. Only the copy sent to the browser is modified.
+ * budget the pipeline escalates: condense remaining rule sections → collapse
+ * older history into a single marker with shrinking keep-windows (developer
+ * contracts collapsed only at the deepest step). Non-Luna models and compaction
+ * turns compile untouched. Only the copy sent to the browser is modified.
  */
 export function compileLunaBudgetedPrompt(
   parsed: CodexParsedRequest,
@@ -325,10 +306,8 @@ export function compileLunaBudgetedPrompt(
     estimatedTokens: beforeTokens,
     removedSections: [],
     condensedTokens: 0,
-    trimmedToolResults: 0,
-    trimmedToolResultTokens: 0,
-    elidedMessages: 0,
-    elidedMessageTokens: 0,
+    collapsedMessages: 0,
+    collapsedTokens: 0,
   };
   if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return result;
 
@@ -357,36 +336,34 @@ export function compileLunaBudgetedPrompt(
     }
   }
 
-  // Escalate trimming and history elision with shrinking keep-windows until the
-  // turn fits (or nothing is left to cut but the protected current round). Each
-  // step only touches content the previous step left verbatim, so re-running
-  // with a smaller window removes strictly more. The final step elides older
-  // developer contracts too — the deepest cut, approaching "only the current
+  // Collapse older history into a single marker with shrinking keep-windows
+  // until the turn fits. Each step re-collapses from the current message list,
+  // so a smaller window removes strictly more; the final steps also collapse
+  // older developer contracts — the deepest cut, approaching "only the current
   // turn survives" (what clearing the thread would leave), done automatically.
-  const escalation: Array<{ tool: number; hist: number; elideDevelopers: boolean }> = [
-    { tool: LUNA_KEEP_RECENT_TOOL_RESULTS, hist: LUNA_KEEP_RECENT_MESSAGES, elideDevelopers: false },
-    { tool: 1, hist: 4, elideDevelopers: false },
-    { tool: 0, hist: 2, elideDevelopers: false },
-    { tool: 0, hist: 1, elideDevelopers: true },
+  const preCollapseTokens = result.estimatedTokens;
+  const preCollapseCount = working.context.messages.length;
+  const escalation: Array<{ keepRecent: number; collapseDevelopers: boolean }> = [
+    { keepRecent: LUNA_KEEP_RECENT_MESSAGES, collapseDevelopers: false },
+    { keepRecent: 4, collapseDevelopers: false },
+    { keepRecent: 2, collapseDevelopers: true },
+    { keepRecent: 1, collapseDevelopers: true },
   ];
   for (const step of escalation) {
     if (result.estimatedTokens <= budget) break;
-    let changed = false;
-    const trimmed = trimOldLunaToolResults(working.context.messages, parsed.modelId, step.tool);
-    if (trimmed) {
-      working = withMessages(trimmed.messages);
-      result.trimmedToolResults += trimmed.trimmedCount;
-      result.trimmedToolResultTokens += trimmed.estTokensRemoved;
-      changed = true;
-    }
-    const elided = elideOldLunaHistory(working.context.messages, parsed.modelId, step.hist, step.elideDevelopers);
-    if (elided) {
-      working = withMessages(elided.messages);
-      result.elidedMessages += elided.elidedCount;
-      result.elidedMessageTokens += elided.estTokensRemoved;
-      changed = true;
-    }
-    if (changed) recompile();
+    const collapsed = collapseOldLunaHistory(
+      working.context.messages,
+      parsed.modelId,
+      step.keepRecent,
+      step.collapseDevelopers,
+    );
+    if (!collapsed) continue;
+    working = withMessages(collapsed.messages);
+    recompile();
+  }
+  if (working.context.messages.length < preCollapseCount) {
+    result.collapsedMessages = preCollapseCount - working.context.messages.length;
+    result.collapsedTokens = Math.max(0, preCollapseTokens - result.estimatedTokens);
   }
 
   return result;
@@ -396,8 +373,8 @@ export function compileLunaBudgetedPrompt(
 export function describeLunaSlimming(
   result: Pick<
     LunaBudgetedCompilation,
-    | "removedSections" | "condensedTokens" | "trimmedToolResults" | "trimmedToolResultTokens"
-    | "elidedMessages" | "elidedMessageTokens" | "beforeTokens" | "estimatedTokens"
+    | "removedSections" | "condensedTokens" | "collapsedMessages" | "collapsedTokens"
+    | "beforeTokens" | "estimatedTokens"
   >,
   budgetTokens: number,
 ): string {
@@ -411,11 +388,8 @@ export function describeLunaSlimming(
   if (result.condensedTokens > 0) {
     actions.push(`condensed the remaining rule sections (~${result.condensedTokens.toLocaleString("en-US")} tokens)`);
   }
-  if (result.trimmedToolResults > 0) {
-    actions.push(`trimmed ${result.trimmedToolResults} older tool result(s) (~${result.trimmedToolResultTokens.toLocaleString("en-US")} tokens)`);
-  }
-  if (result.elidedMessages > 0) {
-    actions.push(`elided ${result.elidedMessages} older history message(s) (~${result.elidedMessageTokens.toLocaleString("en-US")} tokens)`);
+  if (result.collapsedMessages > 0) {
+    actions.push(`collapsed ${result.collapsedMessages.toLocaleString("en-US")} older history message(s) (~${result.collapsedTokens.toLocaleString("en-US")} tokens)`);
   }
   const outcome = result.estimatedTokens <= budgetTokens
     ? `fits the ${budgetTokens.toLocaleString("en-US")}-token ChatGPT Free transport budget`

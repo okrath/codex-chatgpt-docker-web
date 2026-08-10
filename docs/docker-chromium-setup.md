@@ -97,11 +97,13 @@ budget, and every Codex turn must fit into one message. Every Luna turn drops ha
 `## Rule:` sections from the compiled context (ClaudeKit-style bundles a Web model cannot
 execute: skill routing tables, hook protocols, agent-team rules). If the turn still exceeds
 the budget the bridge escalates with shrinking keep-windows until it fits: (1) condense the
-remaining rule sections to their first paragraph, (2) trim older completed tool results to a
-short placeholder, and (3) elide older history down toward just the current turn (recent
-messages kept; older developer contracts dropped only at the deepest step; the in-flight
-round always kept — a ~340k-token thread compiles down to ~17k). This keeps long, tool-heavy
-threads alive instead of dead-ending on "ran out of room in the model's context window," and the
+remaining rule sections to their first paragraph, then (2) collapse older history — removing
+it outright and replacing the whole span with a single marker message, down toward just the
+current turn (recent messages and the in-flight round kept; older developer contracts folded
+in only at the deepest step). Collapsing to one marker matters — a per-message placeholder
+across hundreds of items would itself cost tens of thousands of tokens; a ~340k-token thread
+compiles to ~10k. This keeps long, tool-heavy threads alive instead of dead-ending on "ran
+out of room in the model's context window," and the
 reported usage reflects the slimmed payload so Codex won't retire the thread. Slimming
 applies only to the copy sent to the browser — files on disk are never modified and
 native-model Codex usage is unaffected. A ✂️ commentary line appears in the Codex trace

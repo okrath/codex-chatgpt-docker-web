@@ -1,12 +1,11 @@
 import { expect, test } from "bun:test";
 import {
+  collapseOldLunaHistory,
   condenseLunaRuleSections,
   describeLunaSlimming,
-  elideOldLunaHistory,
   LUNA_DISPOSABLE_RULE_SECTIONS,
   lunaDisposableRuleSections,
   stripLunaRuleSection,
-  trimOldLunaToolResults,
 } from "../src/adapters/chatgpt-web/luna-context-slimming";
 import type { CodexMessage } from "../src/types";
 
@@ -121,32 +120,27 @@ test("the disposable section list honours its environment override", () => {
     .toEqual(["alpha", "beta"]);
 });
 
-test("trimming replaces only older completed tool results, keeping recent ones and the current round", () => {
+test("collapse removes older history into ONE marker, keeping recent messages and the current round", () => {
   // Layout: [tr1, tr2, tr3, assistant, tr4(current round)].
   const messages: CodexMessage[] = [
     toolResult("t1", `one ${BIG}`),
     toolResult("t2", `two ${BIG}`),
     toolResult("t3", `three ${BIG}`),
-    assistantMessage("done"),
+    assistantMessage(`done ${BIG}`),
     toolResult("t4", `four ${BIG}`),
   ];
-  const result = trimOldLunaToolResults(messages, undefined, 1);
+  const result = collapseOldLunaHistory(messages, undefined, 1);
   expect(result).toBeDefined();
-  // keepRecent=1 keeps t3 (newest completed); t4 is current-round (after the assistant).
-  expect(result!.trimmedCount).toBe(2);
-  expect(result!.messages[0]!.content).toContain("trimmed by the bridge");
-  expect(result!.messages[1]!.content).toContain("trimmed by the bridge");
-  expect(result!.messages[2]!.content).toBe(`three ${BIG}`);
-  expect(result!.messages[4]!.content).toBe(`four ${BIG}`);
+  // cutoff = min(len-1=4, currentRoundStart=4) = 4 → collapse t1..t3 + assistant.
+  // One marker replaces the whole removed span (not one placeholder each).
+  expect(result!.collapsedCount).toBe(4);
+  expect(result!.messages.length).toBe(2); // [marker, t4]
+  expect((result!.messages[0]!.content as string)).toContain("[bridge removed 4 older message(s)");
+  expect(result!.messages[1]!.content).toBe(`four ${BIG}`); // current round kept verbatim
   expect(result!.estTokensRemoved).toBeGreaterThan(0);
 });
 
-test("trimming is a no-op when there are no older completed tool results", () => {
-  const messages: CodexMessage[] = [toolResult("t1", `one ${BIG}`), toolResult("t2", `two ${BIG}`)];
-  expect(trimOldLunaToolResults(messages, undefined, 4)).toBeUndefined();
-});
-
-test("history elision keeps recent messages and, by default, developer messages verbatim", () => {
+test("collapse keeps developer messages by default and folds them in at the deepest step", () => {
   const dev = { role: "developer", content: `contract ${BIG}`, timestamp: 0 } as CodexMessage;
   const messages: CodexMessage[] = [
     userMessage(`old user ${BIG}`),
@@ -154,26 +148,19 @@ test("history elision keeps recent messages and, by default, developer messages 
     assistantMessage(`old answer ${BIG}`),
     userMessage(`recent ${BIG}`),
   ];
-  const result = elideOldLunaHistory(messages, undefined, 1);
-  expect(result).toBeDefined();
-  expect((result!.messages[0]!.content as string)).toContain("trimmed by the bridge");
-  expect(result!.messages[1]!.content).toBe(`contract ${BIG}`); // developer kept by default
-  expect(result!.messages[3]!.content).toBe(`recent ${BIG}`); // kept recent
-  expect(result!.elidedCount).toBeGreaterThan(0);
+  const kept = collapseOldLunaHistory(messages, undefined, 1, false);
+  expect(kept).toBeDefined();
+  expect(kept!.messages.some(m => m.role === "developer" && m.content === `contract ${BIG}`)).toBe(true);
+
+  const folded = collapseOldLunaHistory(messages, undefined, 1, true);
+  expect(folded).toBeDefined();
+  expect(folded!.messages.some(m => m.role === "developer")).toBe(false); // developer collapsed
+  expect(folded!.messages.at(-1)!.content).toBe(`recent ${BIG}`); // recent kept
 });
 
-test("the deepest step elides older developer contracts too", () => {
-  const dev = { role: "developer", content: `contract ${BIG}`, timestamp: 0 } as CodexMessage;
-  const messages: CodexMessage[] = [
-    userMessage(`old user ${BIG}`),
-    dev,
-    assistantMessage(`old answer ${BIG}`),
-    userMessage(`recent ${BIG}`),
-  ];
-  const result = elideOldLunaHistory(messages, undefined, 1, true);
-  expect(result).toBeDefined();
-  expect((result!.messages[1]!.content as string)).toContain("trimmed by the bridge"); // developer elided
-  expect(result!.messages[3]!.content).toBe(`recent ${BIG}`); // recent still kept
+test("collapse is a no-op when nothing precedes the keep window / current round", () => {
+  const messages: CodexMessage[] = [userMessage(`only ${BIG}`)];
+  expect(collapseOldLunaHistory(messages, undefined, 8)).toBeUndefined();
 });
 
 test("the slimming summary names every applied action and reports the budget outcome", () => {
@@ -181,19 +168,16 @@ test("the slimming summary names every applied action and reports the budget out
     {
       removedSections: [{ name: "skill-domain-routing", estTokens: 1400 }],
       condensedTokens: 250,
-      trimmedToolResults: 3,
-      trimmedToolResultTokens: 9_000,
-      elidedMessages: 2,
-      elidedMessageTokens: 4_000,
-      beforeTokens: 60_500,
-      estimatedTokens: 27_100,
+      collapsedMessages: 935,
+      collapsedTokens: 980_000,
+      beforeTokens: 1_000_000,
+      estimatedTokens: 17_000,
     },
     28_000,
   );
   expect(summary).toContain("skill-domain-routing (~1,400 tokens)");
   expect(summary).toContain("condensed the remaining rule sections (~250 tokens)");
-  expect(summary).toContain("trimmed 3 older tool result(s) (~9,000 tokens)");
-  expect(summary).toContain("elided 2 older history message(s) (~4,000 tokens)");
-  expect(summary).toContain("~60,500 → ~27,100");
+  expect(summary).toContain("collapsed 935 older history message(s) (~980,000 tokens)");
+  expect(summary).toContain("~1,000,000 → ~17,000");
   expect(summary).toContain("fits the 28,000-token");
 });
