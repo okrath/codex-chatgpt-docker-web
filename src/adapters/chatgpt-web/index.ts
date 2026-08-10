@@ -1,23 +1,20 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { defaultBrokerEndpoint, expandUserPath, resolveBrokerEndpoint } from "../../config";
-import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexMessage, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
+import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
 import type { ProviderAdapter } from "../base";
 import { parseDataUrl } from "../image";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity } from "./environment";
-import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET, estimateCompiledChatGptWebInputTokens } from "./input-tokens";
+import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET } from "./input-tokens";
 import {
-  condenseLunaRuleSections,
+  compileLunaBudgetedPrompt,
   describeLunaOverflowSuggestions,
   describeLunaSlimming,
-  lunaDisposableRuleSections,
-  stripLunaRuleSection,
-  type LunaSlimmedSection,
 } from "./luna-context-slimming";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
-import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt, type CompiledChatGptWebPrompt } from "./prompt";
+import { chatGptReadOnlyContextWarning, type CompiledChatGptWebPrompt } from "./prompt";
 import { TurnBroker, type BrokerToolRequest, type BrokerToolResult } from "./turn-broker";
 import { ChatGptTextFeed, ChatGptTraceFeed, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
 import { estimateChatGptWebUsage } from "./usage";
@@ -234,74 +231,38 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const trace = new ChatGptTraceFeed();
     const text = new ChatGptTextFeed();
     /**
-     * A Luna (ChatGPT Free) turn always sheds the harness-only rule sections —
-     * the Web model cannot execute them, so they are pure transport weight. If
-     * the turn still exceeds the measured Free transport budget, the remaining
-     * rule bundles are condensed to their first paragraph. The visible trace
-     * narrates the slimming only when the turn would otherwise have overflowed;
-     * routine strips are logged to the daemon console instead. Applies to both
-     * read-only and tool-capable turns.
+     * A Luna (ChatGPT Free) turn always sheds the harness-only rule sections;
+     * an over-budget turn then escalates through rule condensation, older
+     * tool-result trimming, and history elision (see luna-context-slimming).
+     * The visible trace narrates the slimming only when the turn would
+     * otherwise have overflowed; routine strips are logged to the daemon
+     * console instead. Applies to both read-only and tool-capable turns.
      */
     const compilePromptWithLunaBudget = (turnToken?: string): CompiledChatGptWebPrompt => {
-      const compileWith = (input: CodexParsedRequest): CompiledChatGptWebPrompt => compileChatGptWebPrompt(
-        input,
+      const result = compileLunaBudgetedPrompt(
+        checkpointInput.parsed,
         turnCapabilities,
         turnToken,
         { captureLunaCheckpoint },
       );
-      let working = checkpointInput.parsed;
-      let compiled = compileWith(working);
-      if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return compiled;
-      const beforeTokens = estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
-      const withMessages = (messages: readonly CodexMessage[]): CodexParsedRequest => ({
-        ...working,
-        context: { ...working.context, messages: [...messages] },
-      });
-      const removed: LunaSlimmedSection[] = [];
-      for (const section of lunaDisposableRuleSections()) {
-        const result = stripLunaRuleSection(working.context.messages, section, parsed.modelId);
-        if (!result) continue;
-        working = withMessages(result.messages);
-        removed.push({ name: section, estTokens: result.estTokensRemoved });
-      }
-      if (removed.length > 0) compiled = compileWith(working);
-      let estimated = removed.length > 0
-        ? estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId)
-        : beforeTokens;
-      let condensedTokens = 0;
-      if (estimated > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
-        const condensed = condenseLunaRuleSections(working.context.messages, parsed.modelId);
-        if (condensed) {
-          working = withMessages(condensed.messages);
-          condensedTokens = condensed.estTokensRemoved;
-          compiled = compileWith(working);
-          estimated = estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
-        }
-      }
-      if (removed.length > 0 || condensedTokens > 0) {
-        const summary = describeLunaSlimming(
-          removed,
-          condensedTokens,
-          beforeTokens,
-          estimated,
-          CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
-        );
+      if (result.slimmed) {
+        const summary = describeLunaSlimming(result, CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
         console.info(`[chatgpt-web] ${summary}`);
-        if (beforeTokens > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
+        if (result.beforeTokens > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
           trace.push({ kind: "commentary", text: summary });
         }
       }
-      if (estimated > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
+      if (result.estimatedTokens > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
         const suggestions = describeLunaOverflowSuggestions(
-          working.context.messages,
-          estimated,
+          result.messages,
+          result.estimatedTokens,
           CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
           parsed.modelId,
         );
         trace.push({ kind: "commentary", text: suggestions });
         console.error(`[chatgpt-web] ${suggestions}`);
       }
-      return compiled;
+      return result.compiled;
     };
     if (!mode.localTools) {
       const browser = finalizeCheckpoint(worker.run({

@@ -1,5 +1,15 @@
-import type { CodexContentPart, CodexMessage } from "../../types";
+import type { CodexContentPart, CodexMessage, CodexParsedRequest } from "../../types";
 import { estimateTokens } from "../../lib/token-estimate";
+import {
+  CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
+  estimateCompiledChatGptWebInputTokens,
+} from "./input-tokens";
+import { CHATGPT_WEB_LUNA_MODEL_ID, type ChatGptWebCapabilities } from "./model";
+import {
+  compileChatGptWebPrompt,
+  type CompiledChatGptWebPrompt,
+  type CompileChatGptWebPromptOptions,
+} from "./prompt";
 
 /**
  * ClaudeKit-style instruction bundles concatenate independent rule files as
@@ -184,29 +194,217 @@ export function condenseLunaRuleSections(
   return { messages: next, estTokensRemoved };
 }
 
+/** Tool results delivered after the last assistant answer belong to the round in flight. */
+function currentRoundStartIndex(messages: readonly CodexMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]!.role === "assistant") return index + 1;
+  }
+  return 0;
+}
+
+function messageText(message: CodexMessage): string {
+  const content = (message as { content: unknown }).content;
+  return typeof content === "string" ? content : JSON.stringify(content);
+}
+
+const LUNA_TRIM_MIN_TOKENS = 64;
+export const LUNA_KEEP_RECENT_TOOL_RESULTS = 4;
+export const LUNA_KEEP_RECENT_MESSAGES = 8;
+
+/**
+ * Replace the contents of older tool results with a short note. Results that
+ * arrived after the last assistant answer belong to the current round and are
+ * never touched, and the most recent completed ones are kept verbatim.
+ */
+export function trimOldLunaToolResults(
+  messages: readonly CodexMessage[],
+  modelId?: string,
+  keepRecent = LUNA_KEEP_RECENT_TOOL_RESULTS,
+): { messages: CodexMessage[]; trimmedCount: number; estTokensRemoved: number } | undefined {
+  const protectedFrom = currentRoundStartIndex(messages);
+  const completedToolResults = messages.flatMap((message, index) =>
+    message.role === "toolResult" && index < protectedFrom ? [index] : []
+  );
+  const trimmable = completedToolResults.slice(0, Math.max(0, completedToolResults.length - keepRecent));
+  if (trimmable.length === 0) return undefined;
+  let estTokensRemoved = 0;
+  let trimmedCount = 0;
+  const next = [...messages];
+  for (const index of trimmable) {
+    const message = next[index]!;
+    const tokens = estimateTokens(messageText(message), modelId);
+    if (tokens < LUNA_TRIM_MIN_TOKENS) continue;
+    estTokensRemoved += tokens;
+    trimmedCount += 1;
+    next[index] = {
+      ...message,
+      content: `[trimmed by the bridge: older tool result (~${tokens.toLocaleString("en-US")} tokens) removed to fit the ChatGPT Free browser transport budget]`,
+    } as CodexMessage;
+  }
+  if (trimmedCount === 0) return undefined;
+  return { messages: next, trimmedCount, estTokensRemoved };
+}
+
+/**
+ * Last resort for very long threads: elide the contents of older user,
+ * assistant, and tool-result history. The most recent messages and every
+ * developer message (contracts, skill instructions) are kept verbatim.
+ */
+export function elideOldLunaHistory(
+  messages: readonly CodexMessage[],
+  modelId?: string,
+  keepRecent = LUNA_KEEP_RECENT_MESSAGES,
+): { messages: CodexMessage[]; elidedCount: number; estTokensRemoved: number } | undefined {
+  const cutoff = Math.min(Math.max(0, messages.length - keepRecent), currentRoundStartIndex(messages));
+  let estTokensRemoved = 0;
+  let elidedCount = 0;
+  const next = messages.map((message, index) => {
+    if (index >= cutoff || message.role === "developer") return message;
+    const tokens = estimateTokens(messageText(message), modelId);
+    if (tokens < LUNA_TRIM_MIN_TOKENS) return message;
+    estTokensRemoved += tokens;
+    elidedCount += 1;
+    const note = `[trimmed by the bridge: older task history (~${tokens.toLocaleString("en-US")} tokens) removed to fit the ChatGPT Free browser transport budget]`;
+    if (message.role === "assistant") {
+      return { ...message, content: [{ type: "text", text: note }] } as CodexMessage;
+    }
+    return { ...message, content: note } as CodexMessage;
+  });
+  if (elidedCount === 0) return undefined;
+  return { messages: next, elidedCount, estTokensRemoved };
+}
+
+export interface LunaBudgetedCompilation {
+  compiled: CompiledChatGptWebPrompt;
+  /** The message list the compiled prompt was built from (post-slimming). */
+  messages: readonly CodexMessage[];
+  slimmed: boolean;
+  beforeTokens: number;
+  estimatedTokens: number;
+  removedSections: LunaSlimmedSection[];
+  condensedTokens: number;
+  trimmedToolResults: number;
+  trimmedToolResultTokens: number;
+  elidedMessages: number;
+  elidedMessageTokens: number;
+}
+
+/**
+ * Compile a browser prompt under the ChatGPT Free transport budget. Luna turns
+ * always shed the harness-only rule sections; when the turn still exceeds the
+ * budget the pipeline escalates: condense remaining rule sections → trim older
+ * tool results → elide older history. Non-Luna models and compaction turns
+ * compile untouched. Only the copy sent to the browser is modified.
+ */
+export function compileLunaBudgetedPrompt(
+  parsed: CodexParsedRequest,
+  capabilities: ChatGptWebCapabilities,
+  turnToken: string | undefined,
+  options?: CompileChatGptWebPromptOptions,
+): LunaBudgetedCompilation {
+  let working = parsed;
+  const compileWith = (input: CodexParsedRequest): CompiledChatGptWebPrompt =>
+    compileChatGptWebPrompt(input, capabilities, turnToken, options);
+  const withMessages = (messages: readonly CodexMessage[]): CodexParsedRequest => ({
+    ...working,
+    context: { ...working.context, messages: [...messages] },
+  });
+
+  let compiled = compileWith(working);
+  const beforeTokens = estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
+  const result: LunaBudgetedCompilation = {
+    compiled,
+    messages: working.context.messages,
+    slimmed: false,
+    beforeTokens,
+    estimatedTokens: beforeTokens,
+    removedSections: [],
+    condensedTokens: 0,
+    trimmedToolResults: 0,
+    trimmedToolResultTokens: 0,
+    elidedMessages: 0,
+    elidedMessageTokens: 0,
+  };
+  if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return result;
+
+  const budget = CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET;
+  const recompile = (): void => {
+    result.compiled = compileWith(working);
+    result.estimatedTokens = estimateCompiledChatGptWebInputTokens(result.compiled, parsed.modelId);
+    result.messages = working.context.messages;
+    result.slimmed = true;
+  };
+
+  for (const section of lunaDisposableRuleSections()) {
+    const stripped = stripLunaRuleSection(working.context.messages, section, parsed.modelId);
+    if (!stripped) continue;
+    working = withMessages(stripped.messages);
+    result.removedSections.push({ name: section, estTokens: stripped.estTokensRemoved });
+  }
+  if (result.removedSections.length > 0) recompile();
+
+  if (result.estimatedTokens > budget) {
+    const condensed = condenseLunaRuleSections(working.context.messages, parsed.modelId);
+    if (condensed) {
+      working = withMessages(condensed.messages);
+      result.condensedTokens = condensed.estTokensRemoved;
+      recompile();
+    }
+  }
+
+  if (result.estimatedTokens > budget) {
+    const trimmed = trimOldLunaToolResults(working.context.messages, parsed.modelId);
+    if (trimmed) {
+      working = withMessages(trimmed.messages);
+      result.trimmedToolResults = trimmed.trimmedCount;
+      result.trimmedToolResultTokens = trimmed.estTokensRemoved;
+      recompile();
+    }
+  }
+
+  if (result.estimatedTokens > budget) {
+    const elided = elideOldLunaHistory(working.context.messages, parsed.modelId);
+    if (elided) {
+      working = withMessages(elided.messages);
+      result.elidedMessages = elided.elidedCount;
+      result.elidedMessageTokens = elided.estTokensRemoved;
+      recompile();
+    }
+  }
+
+  return result;
+}
+
 /** One-line summary for the visible Codex trace and the daemon log. */
 export function describeLunaSlimming(
-  removed: readonly LunaSlimmedSection[],
-  condensedTokens: number,
-  beforeTokens: number,
-  afterTokens: number,
+  result: Pick<
+    LunaBudgetedCompilation,
+    | "removedSections" | "condensedTokens" | "trimmedToolResults" | "trimmedToolResultTokens"
+    | "elidedMessages" | "elidedMessageTokens" | "beforeTokens" | "estimatedTokens"
+  >,
   budgetTokens: number,
 ): string {
   const actions: string[] = [];
-  if (removed.length > 0) {
-    const sections = removed
+  if (result.removedSections.length > 0) {
+    const sections = result.removedSections
       .map(section => `${section.name} (~${section.estTokens.toLocaleString("en-US")} tokens)`)
       .join(", ");
     actions.push(`dropped harness-only rule sections the Web model cannot use: ${sections}`);
   }
-  if (condensedTokens > 0) {
-    actions.push(`condensed the remaining rule sections (~${condensedTokens.toLocaleString("en-US")} tokens)`);
+  if (result.condensedTokens > 0) {
+    actions.push(`condensed the remaining rule sections (~${result.condensedTokens.toLocaleString("en-US")} tokens)`);
   }
-  const outcome = afterTokens <= budgetTokens
+  if (result.trimmedToolResults > 0) {
+    actions.push(`trimmed ${result.trimmedToolResults} older tool result(s) (~${result.trimmedToolResultTokens.toLocaleString("en-US")} tokens)`);
+  }
+  if (result.elidedMessages > 0) {
+    actions.push(`elided ${result.elidedMessages} older history message(s) (~${result.elidedMessageTokens.toLocaleString("en-US")} tokens)`);
+  }
+  const outcome = result.estimatedTokens <= budgetTokens
     ? `fits the ${budgetTokens.toLocaleString("en-US")}-token ChatGPT Free transport budget`
     : `still exceeds the ${budgetTokens.toLocaleString("en-US")}-token ChatGPT Free transport budget`;
   return `✂️ Luna context slimming ${actions.join("; ")}. `
-    + `Estimated input: ~${beforeTokens.toLocaleString("en-US")} → ~${afterTokens.toLocaleString("en-US")} tokens (${outcome}).`;
+    + `Estimated input: ~${result.beforeTokens.toLocaleString("en-US")} → ~${result.estimatedTokens.toLocaleString("en-US")} tokens (${outcome}).`;
 }
 
 /** Largest remaining context messages, for actionable overflow suggestions. */

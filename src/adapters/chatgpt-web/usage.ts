@@ -1,7 +1,6 @@
 import { estimateTokens } from "../../lib/token-estimate";
 import type { CodexParsedRequest, CodexUsage } from "../../types";
-import { estimateCompiledChatGptWebInputTokens } from "./input-tokens";
-import { compileChatGptWebPrompt } from "./prompt";
+import { compileLunaBudgetedPrompt } from "./luna-context-slimming";
 import { extractChatGptTurnIdentity } from "./environment";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import type { BrokerToolRequest } from "./turn-broker";
@@ -26,7 +25,10 @@ export function estimateChatGptWebInputTokens(
 ): number {
   const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   const identity = extractChatGptTurnIdentity(parsed);
-  const compiled = compileChatGptWebPrompt(
+  // Usage must reflect the payload actually sent to the browser, which for Luna
+  // is the budget-slimmed compile; otherwise Codex's own window accounting
+  // would retire long threads that the transport still carries comfortably.
+  const result = compileLunaBudgetedPrompt(
     parsed,
     capabilities,
     mode.localTools ? ESTIMATE_TURN_TOKEN : undefined,
@@ -36,7 +38,7 @@ export function estimateChatGptWebInputTokens(
         && Boolean(identity.threadId && identity.turnId),
     },
   );
-  return estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
+  return result.estimatedTokens;
 }
 
 function roundEvidenceText(evidence: ChatGptWebRoundEvidence): string {

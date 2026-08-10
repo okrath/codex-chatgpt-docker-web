@@ -2,11 +2,27 @@ import { expect, test } from "bun:test";
 import {
   condenseLunaRuleSections,
   describeLunaSlimming,
+  elideOldLunaHistory,
   LUNA_DISPOSABLE_RULE_SECTIONS,
   lunaDisposableRuleSections,
   stripLunaRuleSection,
+  trimOldLunaToolResults,
 } from "../src/adapters/chatgpt-web/luna-context-slimming";
 import type { CodexMessage } from "../src/types";
+
+const BIG = "x ".repeat(400);
+
+function toolResult(id: string, text: string): CodexMessage {
+  return { role: "toolResult", toolCallId: id, toolName: "sh", isError: false, content: text } as CodexMessage;
+}
+
+function assistantMessage(text: string): CodexMessage {
+  return { role: "assistant", content: [{ type: "text", text }], timestamp: 0 } as CodexMessage;
+}
+
+function userMessage(text: string): CodexMessage {
+  return { role: "user", content: text, timestamp: 0 };
+}
 
 const RULE_BUNDLE = [
   "## Rule: CLAUDE",
@@ -105,16 +121,65 @@ test("the disposable section list honours its environment override", () => {
     .toEqual(["alpha", "beta"]);
 });
 
-test("the slimming summary names sections and reports the budget outcome", () => {
+test("trimming replaces only older completed tool results, keeping recent ones and the current round", () => {
+  // Layout: [tr1, tr2, tr3, assistant, tr4(current round)].
+  const messages: CodexMessage[] = [
+    toolResult("t1", `one ${BIG}`),
+    toolResult("t2", `two ${BIG}`),
+    toolResult("t3", `three ${BIG}`),
+    assistantMessage("done"),
+    toolResult("t4", `four ${BIG}`),
+  ];
+  const result = trimOldLunaToolResults(messages, undefined, 1);
+  expect(result).toBeDefined();
+  // keepRecent=1 keeps t3 (newest completed); t4 is current-round (after the assistant).
+  expect(result!.trimmedCount).toBe(2);
+  expect(result!.messages[0]!.content).toContain("trimmed by the bridge");
+  expect(result!.messages[1]!.content).toContain("trimmed by the bridge");
+  expect(result!.messages[2]!.content).toBe(`three ${BIG}`);
+  expect(result!.messages[4]!.content).toBe(`four ${BIG}`);
+  expect(result!.estTokensRemoved).toBeGreaterThan(0);
+});
+
+test("trimming is a no-op when there are no older completed tool results", () => {
+  const messages: CodexMessage[] = [toolResult("t1", `one ${BIG}`), toolResult("t2", `two ${BIG}`)];
+  expect(trimOldLunaToolResults(messages, undefined, 4)).toBeUndefined();
+});
+
+test("history elision keeps recent messages and every developer message verbatim", () => {
+  const dev = { role: "developer", content: `contract ${BIG}`, timestamp: 0 } as CodexMessage;
+  const messages: CodexMessage[] = [
+    userMessage(`old user ${BIG}`),
+    dev,
+    assistantMessage(`old answer ${BIG}`),
+    userMessage(`recent ${BIG}`),
+  ];
+  const result = elideOldLunaHistory(messages, undefined, 1);
+  expect(result).toBeDefined();
+  expect((result!.messages[0]!.content as string)).toContain("trimmed by the bridge");
+  expect(result!.messages[1]!.content).toBe(`contract ${BIG}`); // developer never elided
+  expect(result!.messages[3]!.content).toBe(`recent ${BIG}`); // kept recent
+  expect(result!.elidedCount).toBeGreaterThan(0);
+});
+
+test("the slimming summary names every applied action and reports the budget outcome", () => {
   const summary = describeLunaSlimming(
-    [{ name: "skill-domain-routing", estTokens: 1400 }],
-    250,
-    30_500,
-    27_100,
+    {
+      removedSections: [{ name: "skill-domain-routing", estTokens: 1400 }],
+      condensedTokens: 250,
+      trimmedToolResults: 3,
+      trimmedToolResultTokens: 9_000,
+      elidedMessages: 2,
+      elidedMessageTokens: 4_000,
+      beforeTokens: 60_500,
+      estimatedTokens: 27_100,
+    },
     28_000,
   );
   expect(summary).toContain("skill-domain-routing (~1,400 tokens)");
   expect(summary).toContain("condensed the remaining rule sections (~250 tokens)");
-  expect(summary).toContain("~30,500 → ~27,100");
+  expect(summary).toContain("trimmed 3 older tool result(s) (~9,000 tokens)");
+  expect(summary).toContain("elided 2 older history message(s) (~4,000 tokens)");
+  expect(summary).toContain("~60,500 → ~27,100");
   expect(summary).toContain("fits the 28,000-token");
 });

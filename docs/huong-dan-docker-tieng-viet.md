@@ -39,16 +39,21 @@ Free giới hạn **~28.000 token cho MỖI tin nhắn browser**, và mỗi turn
 của model Luna (~1 triệu token) và **không thể nới** từ phía dự án này. Thực tế:
 
 - Task nhỏ, gọn thì chạy tốt: prompt ngắn, vài file, lịch sử ngắn.
-- Turn bị tràn khi ngữ cảnh biên dịch quá lớn — system prompt dài, instructions toàn cục
-  nặng (ví dụ `~/.codex/AGENTS.md` đồ sộ), nhiều/lớn file được kéo vào ngữ cảnh, hoặc lịch
-  sử nhiều lượt. Codex báo là *"ran out of room in the model's context window."*
-- Bridge tự cắt gọn những gì an toàn (xem mục **cơ chế tự cắt** bên dưới), nhưng phần lõi
-  không thể cắt — system prompt của Codex, contract tool MCP (khi full mode), và turn hiện
-  tại — vẫn phải vừa ~28k. Full mode có thêm contract tool nên mỗi turn **nặng hơn**, dư
-  địa cho nội dung của bạn ít hơn so với browser-only.
-- Muốn vượt qua: giảm turn (tỉa `AGENTS.md`, mở thread mới/ngắn, làm ít file một lúc) hoặc
-  dùng gói ChatGPT trả phí — transport của gói trả phí lớn hơn nhiều và mở khóa
-  Instant/Medium/High/Extra High.
+- Thread dài, nhiều tool vẫn chạy được: bridge tự cắt kết quả tool cũ và lịch sử để vừa
+  ngân sách (xem mục **cơ chế tự cắt** bên dưới), nên thread sâu không còn bị kẹt ở
+  *"ran out of room in the model's context window."* Đánh đổi: model Web không còn thấy
+  toàn văn output tool cũ — nó giữ các turn gần nhất + checkpoint của Luna, nên câu hỏi về
+  chi tiết từ nhiều lượt trước sẽ kém chính xác.
+- Một turn vẫn có thể tràn khi phần **lõi không cắt được** đã quá lớn — system prompt của
+  Codex, contract tool MCP (full mode), instruction hiện tại, và một file lớn vừa đọc đều
+  phải vừa ~28k kể cả sau khi cắt. Full mode có thêm contract tool nên mỗi turn **nặng
+  hơn**, dư địa cho nội dung của bạn ít hơn browser-only.
+- Nếu cắt hết mức mà turn vẫn tràn: giảm turn (tỉa `~/.codex/AGENTS.md`, mở thread
+  mới/ngắn, làm ít file / file nhỏ hơn một lúc) hoặc dùng gói ChatGPT trả phí — transport
+  lớn hơn nhiều và mở khóa Instant/Medium/High/Extra High.
+- Bridge **không thể tự mở thread Codex mới** cho bạn (thread do Codex quản lý; bridge chỉ
+  trả lời từng turn) — nhưng nhờ tự cắt, bạn hiếm khi cần. Khi chính Codex khuyên tạo
+  thread mới, đó vẫn là cách reset sạch nhất cho thread đã tích lịch sử cực lớn.
 
 Xem `docker compose logs codex-chatgpt-web` để biết con số token chính xác mỗi khi turn bị
 từ chối.
@@ -160,17 +165,26 @@ ChatGPT Free từ chối tin nhắn đơn lẻ vượt ~**28.000 token** (giới
 cửa sổ 1M của model). Vì mỗi turn Codex phải nhét toàn bộ ngữ cảnh vào một tin nhắn, task
 lớn có thể vượt trần này.
 
-Fork này xử lý **tự động** khi model là Luna:
+Fork này xử lý **tự động** khi model là Luna, cắt theo thứ tự leo thang cho tới khi vừa 28k:
 
-1. **Mọi turn Luna** đều được bỏ các khối quy tắc chỉ dành cho harness cục bộ (các section
+1. **Mọi turn Luna** đều bỏ các khối quy tắc chỉ dành cho harness cục bộ (các section
    `## Rule:` kiểu ClaudeKit như bảng routing skill `/ck:`, hook protocol, luật Agent
    Team — model Web không dùng được chúng).
-2. Nếu sau đó vẫn vượt 28k → tóm tắt các section quy tắc còn lại về đoạn mở đầu.
-3. Việc cắt chỉ áp dụng lên **bản sao gửi vào browser** — file trên máy (AGENTS.md...)
-   không bao giờ bị sửa, và Codex dùng model thường không bị ảnh hưởng.
-4. Dòng ✂️ hiện trong trace của Codex khi việc cắt đã "cứu" một turn quá khổ; các lần cắt
-   thông thường ghi trong log container (`docker compose logs`). Nếu cắt hết mức mà vẫn
-   vượt, log ghi rõ khối nào còn nặng bao nhiêu.
+2. Nếu vẫn vượt → **tóm tắt** các section quy tắc còn lại về đoạn mở đầu.
+3. Nếu vẫn vượt → **cắt kết quả tool cũ** (thay bằng ghi chú ngắn), giữ nguyên các kết quả
+   gần nhất và round đang chạy dở.
+4. Cuối cùng, nếu vẫn vượt → **lược lịch sử user/assistant cũ** (luôn giữ developer contract
+   và các message gần nhất).
+
+Nhờ tầng 3–4, thread dài nhiều tool **không còn chết** ở lỗi "ran out of room" — usage báo
+về Codex là con số sau khi cắt nên Codex cũng không tự loại bỏ thread. Đánh đổi: model
+không còn thấy toàn văn tool/lịch sử cũ (giữ turn gần + checkpoint Luna).
+
+Việc cắt chỉ áp dụng lên **bản sao gửi vào browser** — file trên máy (AGENTS.md...) không
+bao giờ bị sửa, và Codex dùng model thường không bị ảnh hưởng. Dòng ✂️ hiện trong trace của
+Codex khi việc cắt đã "cứu" một turn quá khổ; các lần cắt thông thường ghi trong log
+container (`docker compose logs`). Nếu cắt hết mức mà vẫn vượt, log ghi rõ khối nào còn
+nặng bao nhiêu.
 
 Tùy biến danh sách section bị cắt qua biến môi trường
 `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (danh sách tên cách nhau dấu phẩy; đặt `off` để tắt).

@@ -93,15 +93,20 @@ mapping at `17841`; only the noVNC port is freely remappable.
 ## Luna context slimming (Free accounts)
 
 ChatGPT Free rejects a single browser message above a measured ~28,000-token transport
-budget, and every Codex turn must fit into one message. Every Luna turn therefore drops
-harness-only `## Rule:` sections from the compiled context (ClaudeKit-style bundles a Web
-model cannot execute: skill routing tables, hook protocols, agent-team rules). If the turn
-still exceeds the budget, the remaining rule sections are condensed to their first
-paragraph. Slimming applies only to the copy sent to the browser — files on disk are never
-modified and native-model Codex usage is unaffected. A ✂️ commentary line appears in the
-Codex trace whenever slimming rescued an over-budget turn; routine strips are logged to
-the daemon console. Configure with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated
-section names, `off` disables).
+budget, and every Codex turn must fit into one message. Every Luna turn drops harness-only
+`## Rule:` sections from the compiled context (ClaudeKit-style bundles a Web model cannot
+execute: skill routing tables, hook protocols, agent-team rules). If the turn still exceeds
+the budget the bridge escalates in order: (1) condense the remaining rule sections to their
+first paragraph, (2) trim older completed tool results to a short placeholder (keeping the
+most recent ones and the in-flight round), and (3) elide older user/assistant history
+(developer contracts and recent messages are kept). This keeps long, tool-heavy threads
+alive instead of dead-ending on "ran out of room in the model's context window," and the
+reported usage reflects the slimmed payload so Codex won't retire the thread. Slimming
+applies only to the copy sent to the browser — files on disk are never modified and
+native-model Codex usage is unaffected. A ✂️ commentary line appears in the Codex trace
+whenever slimming rescued an over-budget turn; routine strips are logged to the daemon
+console. Configure with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names,
+`off` disables).
 
 ## Full harness (MCP) in the container
 

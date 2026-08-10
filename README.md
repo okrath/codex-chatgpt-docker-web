@@ -50,18 +50,25 @@ tier — it is *not* Luna's model context window (which is ~1M tokens) and canno
 from this project's side. What it means in practice:
 
 - Small, focused tasks work well: short prompts, a handful of files, shallow histories.
-- A turn overflows when the compiled context is large — a long system prompt, big global
-  instructions (e.g. a heavy `~/.codex/AGENTS.md`), many/large files pulled into context,
-  or a deep multi-turn history. Codex surfaces this as
-  *"ran out of room in the model's context window."*
-- The bridge automatically trims what it safely can (see **Luna context slimming** below),
-  but the irreducible core — Codex's system prompt, the MCP tool contract in full mode, and
-  the current turn — still has to fit within ~28k. Full mode's tool contract makes each
-  turn heavier, so the effective headroom for your own content is smaller than in
-  browser-only mode.
-- To go beyond it you must reduce the turn (trim `AGENTS.md`, start a fresh/short thread,
-  work on fewer files at a time) or use a paid ChatGPT tier, whose web transport budget is
-  substantially larger and unlocks Instant/Medium/High/Extra High.
+- Long, tool-heavy threads keep working: the bridge automatically trims older tool results
+  and history to fit (see **Luna context slimming** below), so a deep thread no longer
+  dead-ends on *"ran out of room in the model's context window."* The trade-off is that the
+  Web model stops seeing the full text of older tool output — it keeps the recent turns plus
+  Luna's rolling checkpoint, so questions about details from many turns back are less
+  reliable.
+- A single turn can still overflow when its *irreducible* core is already too big — Codex's
+  system prompt, the MCP tool contract (full mode), the current instruction, and one large
+  freshly-read file must all fit within ~28k even after slimming. Full mode's tool contract
+  makes each turn heavier, so headroom for your own content is smaller than in browser-only
+  mode.
+- If a turn still overflows after slimming, reduce it (trim `~/.codex/AGENTS.md`, start a
+  fresh/short thread, work on fewer or smaller files at a time) or use a paid ChatGPT tier,
+  whose web transport budget is substantially larger and unlocks
+  Instant/Medium/High/Extra High.
+- Bridge-side automation cannot start a new Codex thread for you (Codex owns threads; the
+  bridge only answers turns) — but with automatic slimming you rarely need to. When Codex
+  itself says to start a new thread, that is still the cleanest reset for a thread that has
+  accumulated a very large history.
 
 Check `docker compose logs codex-chatgpt-web` for the exact token numbers whenever a turn
 is rejected.
@@ -90,15 +97,21 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   Responses server, which intentionally binds `127.0.0.1` only.
 - **Luna context slimming.** ChatGPT Free rejects a single browser message above a
   measured ~28,000-token transport budget, and every Codex turn must fit into one message.
-  On every Luna turn the bridge therefore drops harness-only rule sections from the
-  compiled context (ClaudeKit-style `## Rule:` bundles such as slash-command skill routing
-  tables, hook protocols, and agent-team rules — instructions a Web model cannot execute).
-  If the turn still exceeds the budget, the remaining rule sections are condensed to their
-  first paragraph. Files on disk are never modified — slimming applies only to the copy
-  sent to the browser, and normal Codex usage with native models is unaffected. A ✂️ line
-  in the Codex trace reports the numbers whenever slimming rescued an over-budget turn;
-  routine strips are logged in `docker compose logs`. Override the droppable section list
-  with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated names, or `off` to disable).
+  Every Luna turn drops harness-only rule sections from the compiled context (ClaudeKit-style
+  `## Rule:` bundles such as slash-command skill routing tables, hook protocols, and
+  agent-team rules — instructions a Web model cannot execute). If the turn still exceeds the
+  budget the bridge escalates, in order: **(1)** condense the remaining rule sections to
+  their first paragraph, **(2)** trim older completed tool results (keeping the most recent
+  ones and the in-flight round) to a short placeholder, and **(3)** as a last resort, elide
+  older user/assistant history (developer contracts and recent messages are always kept).
+  This keeps long, tool-heavy threads alive instead of dead-ending on
+  *"ran out of room in the model's context window"* — the reported usage reflects the
+  slimmed payload, so Codex won't retire a thread the transport still carries. Files on disk
+  are never modified — slimming applies only to the copy sent to the browser, and normal
+  Codex usage with native models is unaffected. A ✂️ line in the Codex trace reports the
+  numbers whenever slimming rescued an over-budget turn; routine strips are logged in
+  `docker compose logs`. Override the droppable section list with
+  `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated names, or `off` to disable).
 
 Everything else — selectors, streaming, compaction, model catalog, security checks — is
 unchanged upstream code.
