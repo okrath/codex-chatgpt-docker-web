@@ -135,13 +135,15 @@ lớn có thể vượt trần này.
 
 Fork này xử lý **tự động** khi model là Luna:
 
-1. Turn dưới 28k → gửi nguyên vẹn, không đụng gì.
-2. Turn vượt 28k → tự bỏ các khối quy tắc chỉ dành cho harness cục bộ (các section
-   `## Rule:` kiểu ClaudeKit như bảng routing skill `/ck:` — model Web không dùng được),
-   rồi nếu vẫn vượt thì tóm tắt các section quy tắc còn lại về đoạn mở đầu.
-3. Mọi thao tác cắt gọn được báo lại bằng dòng ✂️ trong trace của Codex, kèm số token
-   trước/sau. Nếu cắt hết mức mà vẫn vượt, log container (`docker compose logs`) ghi rõ
-   khối nào còn nặng bao nhiêu.
+1. **Mọi turn Luna** đều được bỏ các khối quy tắc chỉ dành cho harness cục bộ (các section
+   `## Rule:` kiểu ClaudeKit như bảng routing skill `/ck:`, hook protocol, luật Agent
+   Team — model Web không dùng được chúng).
+2. Nếu sau đó vẫn vượt 28k → tóm tắt các section quy tắc còn lại về đoạn mở đầu.
+3. Việc cắt chỉ áp dụng lên **bản sao gửi vào browser** — file trên máy (AGENTS.md...)
+   không bao giờ bị sửa, và Codex dùng model thường không bị ảnh hưởng.
+4. Dòng ✂️ hiện trong trace của Codex khi việc cắt đã "cứu" một turn quá khổ; các lần cắt
+   thông thường ghi trong log container (`docker compose logs`). Nếu cắt hết mức mà vẫn
+   vượt, log ghi rõ khối nào còn nặng bao nhiêu.
 
 Tùy biến danh sách section bị cắt qua biến môi trường
 `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (danh sách tên cách nhau dấu phẩy; đặt `off` để tắt).

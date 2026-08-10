@@ -5,9 +5,9 @@ import { estimateTokens } from "../../lib/token-estimate";
  * ClaudeKit-style instruction bundles concatenate independent rule files as
  * `## Rule: <name>` sections. Several of those sections instruct a different
  * harness entirely (Claude Code slash-command skills, hook protocols, agent-team
- * coordination) and are dead weight for a ChatGPT Web browser turn. When a Luna
- * turn overflows the measured ChatGPT Free transport budget, these sections are
- * the safest ballast to drop, in this order (least useful for a Web turn first).
+ * coordination) and are dead weight for a ChatGPT Web browser turn. Every Luna
+ * turn sheds these sections unconditionally — the Web model cannot execute them,
+ * and ChatGPT Free's measured per-message transport budget is scarce.
  *
  * Override with CODEX_CHATGPT_WEB_LUNA_TRIM_RULES (comma-separated section
  * names); set it to "off" to disable slimming entirely.

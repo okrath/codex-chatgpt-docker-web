@@ -55,13 +55,16 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
 - **A `socat` forwarder inside the container** bridges Docker port publishing to the
   Responses server, which intentionally binds `127.0.0.1` only.
 - **Luna context slimming.** ChatGPT Free rejects a single browser message above a
-  measured ~28,000-token transport budget. When a Luna turn overflows it, the bridge
-  automatically drops harness-only rule sections from the compiled context (ClaudeKit-style
-  `## Rule:` bundles such as slash-command skill routing tables that a Web model cannot
-  execute), then condenses the remaining rule sections, and narrates exactly what it
-  removed in the visible Codex trace. Turns under the budget are sent untouched. Override
-  the droppable section list with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated
-  names, or `off` to disable).
+  measured ~28,000-token transport budget, and every Codex turn must fit into one message.
+  On every Luna turn the bridge therefore drops harness-only rule sections from the
+  compiled context (ClaudeKit-style `## Rule:` bundles such as slash-command skill routing
+  tables, hook protocols, and agent-team rules — instructions a Web model cannot execute).
+  If the turn still exceeds the budget, the remaining rule sections are condensed to their
+  first paragraph. Files on disk are never modified — slimming applies only to the copy
+  sent to the browser, and normal Codex usage with native models is unaffected. A ✂️ line
+  in the Codex trace reports the numbers whenever slimming rescued an over-budget turn;
+  routine strips are logged in `docker compose logs`. Override the droppable section list
+  with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated names, or `off` to disable).
 
 Everything else — selectors, streaming, compaction, model catalog, security checks — is
 unchanged upstream code.

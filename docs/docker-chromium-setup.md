@@ -93,12 +93,15 @@ mapping at `17841`; only the noVNC port is freely remappable.
 ## Luna context slimming (Free accounts)
 
 ChatGPT Free rejects a single browser message above a measured ~28,000-token transport
-budget, and every Codex turn must fit into one message. When a Luna turn overflows the
-budget, the bridge automatically drops harness-only `## Rule:` sections (ClaudeKit-style
-bundles a Web model cannot execute), then condenses the remaining rule sections to their
-first paragraph, and reports what it removed as a ✂️ commentary line in the Codex trace.
-Turns under the budget are sent untouched. Configure with
-`CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names, `off` disables).
+budget, and every Codex turn must fit into one message. Every Luna turn therefore drops
+harness-only `## Rule:` sections from the compiled context (ClaudeKit-style bundles a Web
+model cannot execute: skill routing tables, hook protocols, agent-team rules). If the turn
+still exceeds the budget, the remaining rule sections are condensed to their first
+paragraph. Slimming applies only to the copy sent to the browser — files on disk are never
+modified and native-model Codex usage is unaffected. A ✂️ commentary line appears in the
+Codex trace whenever slimming rescued an over-budget turn; routine strips are logged to
+the daemon console. Configure with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated
+section names, `off` disables).
 
 ## Limitations
 
