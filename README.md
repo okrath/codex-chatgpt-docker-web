@@ -265,17 +265,18 @@ docker compose restart codex-chatgpt-web
 
   https://chatgpt.com/#settings/Plugins
 
-  1. Open **Settings → Plugins** (the gear/avatar menu → Settings → Plugins in the sidebar).
-  2. On the Plugins panel, click the **Developer mode** row (the one with a `>` chevron —
-     not the Developer mode toggle under Security), and make sure Developer mode is on.
-  3. Click **Create** (a.k.a. "Create connector" / the **+** control) to add a new one.
-  4. Fill the form:
+  1. Enable **Developer mode** first: **Settings → Security and login → Developer mode**
+     (flip the toggle on; it shows an "Elevated risk" label).
+  2. Open **Settings → Plugins**. The add-connector control lives on the Plugins panel
+     itself (not inside the "Developer mode" row) — click the add / **Create connector**
+     control there.
+  3. Fill the form:
      - **Type / MCP server:** Tunnel — select the exact tunnel you created in Step 1
      - **Authentication:** None
      - **Name:** exactly `Codex Native2` (character-for-character)
-  5. Save. Open the new connector and set **Permissions → Allow all actions**
+  4. Save. Open the new connector and set **Permissions → Allow all actions**
      (**Allow low-risk actions** blocks commands and patches).
-  6. Back on the Plugins panel the row should read **`Codex Native2 — Connected · Allow all`**,
+  5. Back on the Plugins panel the row should read **`Codex Native2 — Connected · Allow all`**,
      and typing `@` in a chat should list **Codex Native2**.
 
   Do not rename or reuse an older **Codex Native** connector.

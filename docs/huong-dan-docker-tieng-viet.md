@@ -218,17 +218,17 @@ trên màn hình noVNC hoặc trình duyệt của bạn):
 
   https://chatgpt.com/#settings/Plugins
 
-  1. Vào **Settings → Plugins** (menu avatar/bánh răng → Settings → Plugins ở sidebar).
-  2. Trong panel Plugins, nhấn dòng **Developer mode** (dòng có mũi tên `>` — KHÔNG phải
-     toggle Developer mode trong Security), đảm bảo Developer mode đang bật.
-  3. Nhấn **Create** (hoặc "Create connector" / nút **+**) để thêm connector mới.
-  4. Điền form:
+  1. Bật **Developer mode** trước: **Settings → Security and login → Developer mode**
+     (gạt toggle sang bật; sẽ có nhãn "Elevated risk").
+  2. Vào **Settings → Plugins**. Nút thêm connector nằm ngay ở panel Plugins này (không
+     phải chui vào dòng "Developer mode") — nhấn nút thêm/**Create connector**.
+  3. Điền form:
      - **Type / MCP server:** Tunnel — chọn đúng tunnel đã tạo ở Bước 1
      - **Authentication:** None
      - **Name:** chính xác `Codex Native2` (từng ký tự)
-  5. Lưu. Mở connector vừa tạo, đặt **Permissions → Allow all actions**
+  4. Lưu. Mở connector vừa tạo, đặt **Permissions → Allow all actions**
      (chọn "Allow low-risk actions" sẽ chặn lệnh và patch).
-  6. Quay lại panel Plugins, dòng đó phải hiện **`Codex Native2 — Connected · Allow all`**,
+  5. Quay lại panel Plugins, dòng đó phải hiện **`Codex Native2 — Connected · Allow all`**,
      và gõ `@` trong chat sẽ thấy **Codex Native2**.
 
   Đừng đổi tên hay dùng lại connector **Codex Native** cũ.
