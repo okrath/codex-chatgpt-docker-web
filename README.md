@@ -54,6 +54,14 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   process itself, so no launchd service is installed).
 - **A `socat` forwarder inside the container** bridges Docker port publishing to the
   Responses server, which intentionally binds `127.0.0.1` only.
+- **Luna context slimming.** ChatGPT Free rejects a single browser message above a
+  measured ~28,000-token transport budget. When a Luna turn overflows it, the bridge
+  automatically drops harness-only rule sections from the compiled context (ClaudeKit-style
+  `## Rule:` bundles such as slash-command skill routing tables that a Web model cannot
+  execute), then condenses the remaining rule sections, and narrates exactly what it
+  removed in the visible Codex trace. Turns under the budget are sent untouched. Override
+  the droppable section list with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated
+  names, or `off` to disable).
 
 Everything else — selectors, streaming, compaction, model catalog, security checks — is
 unchanged upstream code.
@@ -149,6 +157,7 @@ same noVNC page shows every ChatGPT turn live.
 | Cloudflare CAPTCHA repeats | Automation fingerprint | Tick it; if it loops more than ~3 times, `docker compose restart codex-chatgpt-web` and retry |
 | Codex does not list ChatGPT Web models | Codex was not restarted after setup | Quit the Codex app fully and reopen it |
 | Turns fail with missing/expired login state | The ChatGPT session expired (~3 months) | `docker compose exec codex-chatgpt-web codex-chatgpt-web login`, sign in via noVNC, then `docker compose restart codex-chatgpt-web` |
+| Codex says it "ran out of room in the model's context window" on Luna | The compiled turn exceeds ChatGPT Free's ~28k-token per-message transport budget even after automatic slimming | Check `docker compose logs` for the exact numbers; trim global instructions (e.g. `~/.codex/AGENTS.md`), start a smaller task, or use a paid ChatGPT tier |
 | Switch ChatGPT accounts | — | Same as above: run `login` with the new account, then restart |
 | Start over completely | — | `docker compose exec codex-chatgpt-web codex-chatgpt-web route disconnect`, then `docker compose down -v`, then reinstall |
 

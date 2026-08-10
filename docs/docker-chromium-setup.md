@@ -90,6 +90,16 @@ therefore runs a `socat` forwarder (container port `8300` → container loopback
 Compose publishes it back to the host as `127.0.0.1:17841`. Keep the host side of that port
 mapping at `17841`; only the noVNC port is freely remappable.
 
+## Luna context slimming (Free accounts)
+
+ChatGPT Free rejects a single browser message above a measured ~28,000-token transport
+budget, and every Codex turn must fit into one message. When a Luna turn overflows the
+budget, the bridge automatically drops harness-only `## Rule:` sections (ClaudeKit-style
+bundles a Web model cannot execute), then condenses the remaining rule sections to their
+first paragraph, and reports what it removed as a ✂️ commentary line in the Codex trace.
+Turns under the budget are sent untouched. Configure with
+`CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names, `off` disables).
+
 ## Limitations
 
 - **Browser-only mode.** `setup --full` (MCP tool harness over the OpenAI tunnel) is

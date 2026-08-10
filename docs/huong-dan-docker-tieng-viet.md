@@ -127,7 +127,26 @@ docker compose down -v
 - `down -v` xóa container + volume (mất phiên đăng nhập đã lưu).
 - Cài lại: quay về mục 3.
 
-## 8. Ghi nhớ
+## 8. Tài khoản Free và cơ chế tự cắt gọn ngữ cảnh (Luna)
+
+ChatGPT Free từ chối tin nhắn đơn lẻ vượt ~**28.000 token** (giới hạn transport, không phải
+cửa sổ 1M của model). Vì mỗi turn Codex phải nhét toàn bộ ngữ cảnh vào một tin nhắn, task
+lớn có thể vượt trần này.
+
+Fork này xử lý **tự động** khi model là Luna:
+
+1. Turn dưới 28k → gửi nguyên vẹn, không đụng gì.
+2. Turn vượt 28k → tự bỏ các khối quy tắc chỉ dành cho harness cục bộ (các section
+   `## Rule:` kiểu ClaudeKit như bảng routing skill `/ck:` — model Web không dùng được),
+   rồi nếu vẫn vượt thì tóm tắt các section quy tắc còn lại về đoạn mở đầu.
+3. Mọi thao tác cắt gọn được báo lại bằng dòng ✂️ trong trace của Codex, kèm số token
+   trước/sau. Nếu cắt hết mức mà vẫn vượt, log container (`docker compose logs`) ghi rõ
+   khối nào còn nặng bao nhiêu.
+
+Tùy biến danh sách section bị cắt qua biến môi trường
+`CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (danh sách tên cách nhau dấu phẩy; đặt `off` để tắt).
+
+## 9. Ghi nhớ
 
 - **Không đổi cổng host `17841`** — Codex được trỏ cứng vào `http://127.0.0.1:17841/v1`.
 - Cả 2 cổng (17841, 7900) chỉ bind vào `127.0.0.1` của máy bạn, không lộ ra mạng LAN.

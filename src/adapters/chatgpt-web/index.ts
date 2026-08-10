@@ -1,14 +1,23 @@
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import { defaultBrokerEndpoint, expandUserPath, resolveBrokerEndpoint } from "../../config";
-import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
+import { namespacedToolName, type AdapterEvent, type CodexContentPart, type CodexMessage, type CodexParsedRequest, type CodexProviderConfig, type CodexToolResultMessage, type CodexUsage } from "../../types";
 import type { ProviderAdapter } from "../base";
 import { parseDataUrl } from "../image";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity } from "./environment";
+import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET, estimateCompiledChatGptWebInputTokens } from "./input-tokens";
+import {
+  condenseLunaRuleSections,
+  describeLunaOverflowSuggestions,
+  describeLunaSlimming,
+  lunaDisposableRuleSections,
+  stripLunaRuleSection,
+  type LunaSlimmedSection,
+} from "./luna-context-slimming";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
-import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt } from "./prompt";
+import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt, type CompiledChatGptWebPrompt } from "./prompt";
 import { TurnBroker, type BrokerToolRequest, type BrokerToolResult } from "./turn-broker";
 import { ChatGptTextFeed, ChatGptTraceFeed, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
 import { estimateChatGptWebUsage } from "./usage";
@@ -224,6 +233,72 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const browserAbort = new AbortController();
     const trace = new ChatGptTraceFeed();
     const text = new ChatGptTextFeed();
+    /**
+     * Luna (ChatGPT Free) turns must fit the measured browser transport budget.
+     * When a compiled read-only turn exceeds it, automatically shed the
+     * harness-only rule sections and then condense the remaining rule bundles
+     * before giving up, and narrate what happened in the visible trace.
+     */
+    const compileReadOnlyPrompt = (): CompiledChatGptWebPrompt => {
+      const compileWith = (input: CodexParsedRequest): CompiledChatGptWebPrompt => compileChatGptWebPrompt(
+        input,
+        turnCapabilities,
+        undefined,
+        { captureLunaCheckpoint },
+      );
+      let working = checkpointInput.parsed;
+      let compiled = compileWith(working);
+      if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return compiled;
+      let estimated = estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
+      if (estimated <= CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) return compiled;
+      const beforeTokens = estimated;
+      const withMessages = (messages: readonly CodexMessage[]): CodexParsedRequest => ({
+        ...working,
+        context: { ...working.context, messages: [...messages] },
+      });
+      const removed: LunaSlimmedSection[] = [];
+      for (const section of lunaDisposableRuleSections()) {
+        const result = stripLunaRuleSection(working.context.messages, section, parsed.modelId);
+        if (!result) continue;
+        working = withMessages(result.messages);
+        removed.push({ name: section, estTokens: result.estTokensRemoved });
+        compiled = compileWith(working);
+        estimated = estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
+        if (estimated <= CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) break;
+      }
+      let condensedTokens = 0;
+      if (estimated > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
+        const condensed = condenseLunaRuleSections(working.context.messages, parsed.modelId);
+        if (condensed) {
+          working = withMessages(condensed.messages);
+          condensedTokens = condensed.estTokensRemoved;
+          compiled = compileWith(working);
+          estimated = estimateCompiledChatGptWebInputTokens(compiled, parsed.modelId);
+        }
+      }
+      if (removed.length > 0 || condensedTokens > 0) {
+        const summary = describeLunaSlimming(
+          removed,
+          condensedTokens,
+          beforeTokens,
+          estimated,
+          CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
+        );
+        trace.push({ kind: "commentary", text: summary });
+        console.info(`[chatgpt-web] ${summary}`);
+      }
+      if (estimated > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
+        const suggestions = describeLunaOverflowSuggestions(
+          working.context.messages,
+          estimated,
+          CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
+          parsed.modelId,
+        );
+        trace.push({ kind: "commentary", text: suggestions });
+        console.error(`[chatgpt-web] ${suggestions}`);
+      }
+      return compiled;
+    };
     if (!mode.localTools) {
       const browser = finalizeCheckpoint(worker.run({
         traceId,
@@ -231,12 +306,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         reasoning: parsed.options.reasoning,
         capabilities: turnCapabilities,
         prepare: async () => ({
-          ...compileChatGptWebPrompt(
-            checkpointInput.parsed,
-            turnCapabilities,
-            undefined,
-            { captureLunaCheckpoint },
-          ),
+          ...compileReadOnlyPrompt(),
           release: () => {},
         }),
         abortSignal: browserAbort.signal,
