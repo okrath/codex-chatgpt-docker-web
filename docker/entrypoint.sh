@@ -70,5 +70,26 @@ BANNER
   echo "[docker] restart the Codex app once so it picks up the new model route"
 fi
 
+# Full mode: supervise the OpenAI tunnel runtime the way launchd does on macOS
+# (a persistent `tunnel-client run` with automatic restarts).
+CONFIG_MODE=$(bun -e "console.log(JSON.parse(require('fs').readFileSync('$CONFIG_PATH','utf8')).mode)")
+if [ "$CONFIG_MODE" = "full" ]; then
+  { read -r TUNNEL_BIN; read -r TUNNEL_DIR; read -r TUNNEL_PROFILE; } < <(bun -e "
+    const c = JSON.parse(require('fs').readFileSync('$CONFIG_PATH', 'utf8'));
+    console.log(c.tunnel.binaryPath);
+    console.log(c.tunnel.profileDir);
+    console.log(c.tunnel.profileName);
+  ")
+  echo "[docker] supervising OpenAI tunnel runtime (profile ${TUNNEL_PROFILE})"
+  (
+    while true; do
+      "$TUNNEL_BIN" run --profile-dir "$TUNNEL_DIR" --profile "$TUNNEL_PROFILE" \
+        || echo "[docker] tunnel runtime exited with status $?"
+      echo "[docker] restarting tunnel runtime in 10s"
+      sleep 10
+    done
+  ) &
+fi
+
 echo "[docker] starting Responses bridge on 127.0.0.1:${BRIDGE_PORT} (published via ${PROXY_PORT})"
 exec bun /app/src/cli.ts serve

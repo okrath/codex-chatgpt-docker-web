@@ -43,6 +43,9 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   (`launcher/`), the one-command installers, and the native packaging/release scripts were
   deleted from this repository. No desktop launcher, no system Google Chrome, no Bun on
   the host.
+- **Full mode works in the container.** The macOS launchd supervision was replaced by the
+  container entrypoint: setup bootstraps the tunnel profile and the entrypoint keeps
+  `tunnel-client run` alive when the runtime is in full mode.
 - **Added a Docker runtime** ([docker/Dockerfile](docker/Dockerfile),
   [docker/entrypoint.sh](docker/entrypoint.sh), [docker-compose.yml](docker-compose.yml)):
   Bun runtime + Debian Chromium + Xvfb virtual display + noVNC, in one container.
@@ -187,11 +190,47 @@ docker compose exec codex-chatgpt-web codex-chatgpt-web route disconnect
 
 Full guide, storage layout, and port details: [docs/docker-chromium-setup.md](docs/docker-chromium-setup.md).
 
-## Limitations
+## Full harness (local tools over MCP)
 
-- **Browser-only mode.** Upstream's full harness (local Codex tools over an MCP tunnel)
-  is not supported in the container yet; `setup --full` is rejected. Codex shows its
-  standard warning that local tools are unavailable for the selected model.
+Browser-only mode gives the Web model the compiled task context but no local tools. Full
+mode connects ChatGPT's tool calls back into the active Codex task through the official
+[openai/tunnel-client](https://github.com/openai/tunnel-client) (outbound only — no open
+inbound port). All non-Pro Web models, including Luna, become tool-capable; Pro stays
+read-only. Requires **ChatGPT Developer Mode** (for the custom MCP connector).
+
+1. On the OpenAI platform, create a **Tunnel**
+   (<https://platform.openai.com/settings/organization/tunnels>) and a regular **API key**
+   with Tunnels Read + Use (<https://platform.openai.com/settings/organization/api-keys>).
+   Both are free to create and consume no model credits.
+2. Import the runtime key into the container (hidden prompt):
+
+   ```bash
+   docker compose exec -it codex-chatgpt-web codex-chatgpt-web tunnel key-import
+   ```
+
+3. Switch the runtime to full mode (reuses the stored ChatGPT login):
+
+   ```bash
+   docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id tunnel_YOUR_ID --acknowledge-unofficial
+   ```
+
+4. Restart so the container starts supervising the tunnel runtime:
+
+   ```bash
+   docker compose restart codex-chatgpt-web
+   ```
+
+5. In ChatGPT settings, enable **Developer Mode**, then create a **new** connector:
+   type **Tunnel**, select that exact tunnel, **Authentication: None**, named exactly
+   **Codex Native2**, and set its permissions to **Allow all actions** (**Allow low-risk
+   actions** blocks commands and patches). Do not rename or reuse an older **Codex
+   Native** connector.
+6. Restart the Codex app once and start a new task. Check health any time with
+   `codex-chatgpt-web doctor` and `codex-chatgpt-web tunnel status` inside the container.
+
+To go back: `setup --browser-only --acknowledge-unofficial` and restart the container.
+
+## Limitations
 - **No passkeys.** Use password or email-code sign-in.
 - **Fixed bridge port.** Setup writes `openai_base_url = "http://127.0.0.1:17841/v1"`
   into the Codex config, so the host side of the port mapping must stay `17841`.

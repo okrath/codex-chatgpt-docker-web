@@ -283,11 +283,6 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
       + "with CODEX_CHATGPT_WEB_EXTERNAL_SUPERVISOR=1.",
     );
   }
-  if (externallySupervised && config.mode === "full") {
-    throw new Error(
-      "Full mode is not supported under an externally supervised runtime yet; run setup --browser-only.",
-    );
-  }
   preflightCodexIntegration(config, {
     replaceExistingRoute: options.replaceCodexRoute,
   });
@@ -371,7 +366,9 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     );
   }
   if (changedWhileLoaded && !preliminaryChange && existing) await assertServiceIdle(existing);
-  if (!beforeService.loaded) await assertPortAvailable(config.host, config.port);
+  // Under an external supervisor the daemon keeps running through reconfiguration, so the
+  // Responses port is expected to be busy; the supervisor restart applies the new config.
+  if (!beforeService.loaded && !externallySupervised) await assertPortAvailable(config.host, config.port);
 
   if (!launcherOwned) {
     saveConfig(config);
@@ -397,6 +394,12 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
     const needsProfile = !existsSync(profilePath);
     if (launcherOwned) {
       if (tunnelService.installed || tunnelService.loaded) await uninstallTunnelService();
+      if (needsProfile || refreshTunnelWorker || explicitTunnelChange) {
+        await bootstrapTunnelProfile(config);
+      }
+    } else if (externallySupervised) {
+      // The container entrypoint supervises `tunnel-client run` after a restart; bootstrap
+      // or refresh the profile here and leave the validation runtime stopped.
       if (needsProfile || refreshTunnelWorker || explicitTunnelChange) {
         await bootstrapTunnelProfile(config);
       }

@@ -148,7 +148,44 @@ Fork này xử lý **tự động** khi model là Luna:
 Tùy biến danh sách section bị cắt qua biến môi trường
 `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (danh sách tên cách nhau dấu phẩy; đặt `off` để tắt).
 
-## 9. Ghi nhớ
+## 9. Full mode — cho model quyền dùng tool cục bộ (MCP)
+
+Browser-only chỉ cho model đọc ngữ cảnh; **full mode** cho phép model gọi ngược về tool
+của task Codex (đọc/ghi file, chạy lệnh) qua tunnel chính thức của OpenAI (outbound —
+không mở cổng vào). Mọi model Web trừ Pro đều có tool, **kể cả Luna**. Yêu cầu: ChatGPT
+bật được **Developer Mode**.
+
+1. Trên platform.openai.com: tạo **Tunnel** (Settings → Tunnels, copy id `tunnel_...`) và
+   một **API key** thường có quyền Tunnels Read + Use — tạo miễn phí, không tốn credit.
+2. Nhập key vào container (gõ ẩn):
+
+   ```bash
+   docker compose exec -it codex-chatgpt-web codex-chatgpt-web tunnel key-import
+   ```
+
+3. Chuyển sang full mode (dùng lại login ChatGPT đã lưu):
+
+   ```bash
+   docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id tunnel_YOUR_ID --acknowledge-unofficial
+   ```
+
+4. Khởi động lại để container bắt đầu giám sát tunnel runtime:
+
+   ```bash
+   docker compose restart codex-chatgpt-web
+   ```
+
+5. Trong ChatGPT: bật **Developer Mode** → tạo connector **MỚI**: loại **Tunnel**, chọn
+   đúng tunnel vừa tạo, **Authentication: None**, tên chính xác **Codex Native2**,
+   quyền **Allow all actions** (chọn "Allow low-risk actions" sẽ chặn lệnh và patch).
+6. Restart app Codex một lần, tạo task mới. Kiểm tra sức khỏe: `doctor` và
+   `tunnel status` trong container.
+
+Quay về browser-only: `setup --browser-only --acknowledge-unofficial` rồi restart container.
+Lưu ý: trong container, `tunnel start/stop/restart` bị chặn có chủ đích — container tự
+giám sát tunnel; muốn khởi động lại thì restart container.
+
+## 10. Ghi nhớ
 
 - **Không đổi cổng host `17841`** — Codex được trỏ cứng vào `http://127.0.0.1:17841/v1`.
 - Cả 2 cổng (17841, 7900) chỉ bind vào `127.0.0.1` của máy bạn, không lộ ra mạng LAN.

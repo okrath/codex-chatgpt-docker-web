@@ -19,7 +19,7 @@ import { runChatGptMcpMain } from "./adapters/chatgpt-web/mcp-main";
 import { runCommand } from "./process";
 import { startServer } from "./server";
 import { assertServiceIdle, cancelBrowserTurns, getServiceStatus, installService, restartService, startService, stopService, uninstallService } from "./service";
-import { existingFullSetupCredentials, setup, type SetupOptions } from "./setup";
+import { existingFullSetupCredentials, externallySupervisedRuntime, setup, type SetupOptions } from "./setup";
 import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus, waitForTunnelReady } from "./tunnel";
 import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
@@ -286,15 +286,23 @@ async function tunnelCommand(args: string[]): Promise<void> {
     return;
   }
   const config = loadConfig();
-  if (action === "start") startTunnelService();
-  else if (action === "restart") {
-    await assertServiceIdle(config);
-    await restartTunnelService();
-  }
-  else if (action === "stop") {
-    await assertServiceIdle(config);
-    await stopTunnelService();
-    stopTunnel(config);
+  const externallySupervised = externallySupervisedRuntime();
+  if (action === "start" || action === "restart" || action === "stop") {
+    if (externallySupervised) {
+      throw new Error(
+        "The external supervisor (the container) owns the tunnel runtime; "
+        + "restart or stop the container instead (docker compose restart / stop).",
+      );
+    }
+    if (action === "start") startTunnelService();
+    else if (action === "restart") {
+      await assertServiceIdle(config);
+      await restartTunnelService();
+    } else {
+      await assertServiceIdle(config);
+      await stopTunnelService();
+      stopTunnel(config);
+    }
   }
   else if (action !== "status") throw new Error(`Unknown tunnel action: ${action}`);
   const status = action === "start" || action === "restart"
@@ -302,7 +310,8 @@ async function tunnelCommand(args: string[]): Promise<void> {
     : tunnelStatus(config);
   const service = getTunnelServiceStatus();
   stdout.write(`${JSON.stringify({ service, runtime: status }, null, 2)}\n`);
-  if (action !== "stop" && (!service.running || !status.ok)) process.exitCode = 1;
+  const serviceHealthy = service.supported ? service.running : externallySupervised;
+  if (action !== "stop" && (!serviceHealthy || !status.ok)) process.exitCode = 1;
 }
 
 async function openCommand(args: string[]): Promise<void> {

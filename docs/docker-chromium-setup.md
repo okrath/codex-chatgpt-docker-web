@@ -103,11 +103,19 @@ Codex trace whenever slimming rescued an over-budget turn; routine strips are lo
 the daemon console. Configure with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated
 section names, `off` disables).
 
+## Full harness (MCP) in the container
+
+Full mode is supported: setup bootstraps the tunnel profile (`tunnel-client runtimes
+connect` → healthy → stop) and the container entrypoint then supervises a persistent
+`tunnel-client run` — the same role launchd plays on macOS. The flow is documented step
+by step in the README ("Full harness" section): create a Tunnel + runtime key on the
+OpenAI platform, `tunnel key-import`, `setup --full --tunnel-id …`, restart the
+container, then create the **Codex Native2** connector in ChatGPT Developer Mode with
+**Allow all actions**. `tunnel start/stop/restart` are intentionally disabled inside the
+container — restart the container instead; `tunnel status` and `doctor` report health.
+
 ## Limitations
 
-- **Browser-only mode.** `setup --full` (MCP tool harness over the OpenAI tunnel) is
-  rejected under the external supervisor for now; the tunnel client is supervised by
-  launchd/launcher code paths that do not exist in the container.
 - **No passkeys.** The container has no platform authenticator; use password or
   email-code sign-in.
 - **Sign-in challenges.** ChatGPT may show extra verification for a Linux/Chromium
