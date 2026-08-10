@@ -347,6 +347,20 @@ export function parseTunnelStatus(output: string, exitStatus = 0): TunnelRuntime
   }
 }
 
+/**
+ * `runtimes status` reports process_running from the alias registry, which only tracks
+ * the managed runtime that `runtimes connect` spawned. An externally supervised runtime
+ * (the container running `tunnel-client run` directly, like launchd does on macOS) is not
+ * in that registry, but its liveness is still proven: healthy/ready come from an HTTP
+ * probe of the running process's health endpoint.
+ */
+export function tunnelRuntimeAcceptable(
+  status: TunnelRuntimeStatus,
+  externallySupervised: boolean,
+): boolean {
+  return status.ok || (externallySupervised && status.healthy && status.ready);
+}
+
 export function tunnelStatus(config: AppConfig): TunnelRuntimeStatus {
   const settings = tunnel(config);
   if (!existsSync(settings.binaryPath)) {

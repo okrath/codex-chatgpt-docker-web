@@ -20,7 +20,7 @@ import { runCommand } from "./process";
 import { startServer } from "./server";
 import { assertServiceIdle, cancelBrowserTurns, getServiceStatus, installService, restartService, startService, stopService, uninstallService } from "./service";
 import { existingFullSetupCredentials, externallySupervisedRuntime, setup, type SetupOptions } from "./setup";
-import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelStatus, waitForTunnelReady } from "./tunnel";
+import { installRuntimeKeyBytes, managedRuntimeKeyPath, stopTunnel, tunnelRuntimeAcceptable, tunnelStatus, waitForTunnelReady } from "./tunnel";
 import { getTunnelServiceStatus, restartTunnelService, startTunnelService, stopTunnelService, uninstallTunnelService } from "./tunnel-service";
 import { VERSION } from "./version";
 
@@ -311,7 +311,9 @@ async function tunnelCommand(args: string[]): Promise<void> {
   const service = getTunnelServiceStatus();
   stdout.write(`${JSON.stringify({ service, runtime: status }, null, 2)}\n`);
   const serviceHealthy = service.supported ? service.running : externallySupervised;
-  if (action !== "stop" && (!serviceHealthy || !status.ok)) process.exitCode = 1;
+  if (action !== "stop" && (!serviceHealthy || !tunnelRuntimeAcceptable(status, externallySupervised))) {
+    process.exitCode = 1;
+  }
 }
 
 async function openCommand(args: string[]): Promise<void> {

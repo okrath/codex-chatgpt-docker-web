@@ -6,7 +6,7 @@ import { inspectCodexIntegration } from "./codex-integration";
 import { browserLoginStateExists, loginVerificationMarkerPath } from "./browser-login";
 import { getServiceStatus } from "./service";
 import { externallySupervisedRuntime } from "./setup";
-import { tunnelStatus } from "./tunnel";
+import { tunnelRuntimeAcceptable, tunnelStatus } from "./tunnel";
 import { getTunnelServiceStatus } from "./tunnel-service";
 import { inspectLauncherBrowserHost, readLauncherBrowserHostDescriptor } from "./launcher-browser-host";
 import { processRunning } from "./process";
@@ -201,7 +201,7 @@ export async function runDoctor(): Promise<DoctorReport> {
         : { id: "tunnel-service", status: "error", message: "macOS tunnel service is not fully running", detail: JSON.stringify(tunnelService) });
     }
     const runtime = tunnelStatus(config);
-    checks.push(runtime.ok
+    checks.push(tunnelRuntimeAcceptable(runtime, externallySupervisedRuntime())
       ? { id: "tunnel-runtime", status: "ok", message: "Tunnel runtime reports healthy and ready" }
       : { id: "tunnel-runtime", status: "error", message: "Tunnel runtime is not ready", detail: runtime.detail });
     checks.push({

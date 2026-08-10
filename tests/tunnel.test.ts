@@ -1,5 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { parseTunnelStatus, tunnelCommandOutput, tunnelConnectLaunchError } from "../src/tunnel";
+import { parseTunnelStatus, tunnelCommandOutput, tunnelConnectLaunchError, tunnelRuntimeAcceptable } from "../src/tunnel";
+
+describe("externally supervised tunnel runtime acceptance", () => {
+  test("live health evidence is sufficient only under an external supervisor", () => {
+    // `run` under the container is absent from the alias registry, so
+    // process_running stays false even while the health probe answers.
+    const supervised = { ok: false, processRunning: false, healthy: true, ready: true, detail: "" };
+    expect(tunnelRuntimeAcceptable(supervised, true)).toBe(true);
+    expect(tunnelRuntimeAcceptable(supervised, false)).toBe(false);
+    expect(tunnelRuntimeAcceptable({ ...supervised, ready: false }, true)).toBe(false);
+    expect(tunnelRuntimeAcceptable({ ...supervised, healthy: false }, true)).toBe(false);
+    expect(tunnelRuntimeAcceptable({ ...supervised, ok: true }, false)).toBe(true);
+  });
+});
 
 describe("tunnel status boundary", () => {
   test("requires the managed runtime process, health, and readiness together", () => {
