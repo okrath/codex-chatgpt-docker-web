@@ -239,13 +239,14 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
      * the turn still exceeds the measured Free transport budget, the remaining
      * rule bundles are condensed to their first paragraph. The visible trace
      * narrates the slimming only when the turn would otherwise have overflowed;
-     * routine strips are logged to the daemon console instead.
+     * routine strips are logged to the daemon console instead. Applies to both
+     * read-only and tool-capable turns.
      */
-    const compileReadOnlyPrompt = (): CompiledChatGptWebPrompt => {
+    const compilePromptWithLunaBudget = (turnToken?: string): CompiledChatGptWebPrompt => {
       const compileWith = (input: CodexParsedRequest): CompiledChatGptWebPrompt => compileChatGptWebPrompt(
         input,
         turnCapabilities,
-        undefined,
+        turnToken,
         { captureLunaCheckpoint },
       );
       let working = checkpointInput.parsed;
@@ -309,7 +310,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         reasoning: parsed.options.reasoning,
         capabilities: turnCapabilities,
         prepare: async () => ({
-          ...compileReadOnlyPrompt(),
+          ...compilePromptWithLunaBudget(),
           release: () => {},
         }),
         abortSignal: browserAbort.signal,
@@ -348,12 +349,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         tokenSettled = true;
         token.resolve(turnToken);
         try {
-          const compiled = compileChatGptWebPrompt(
-            checkpointInput.parsed,
-            turnCapabilities,
-            turnToken,
-            { captureLunaCheckpoint },
-          );
+          const compiled = compilePromptWithLunaBudget(turnToken);
           return { ...compiled, release: () => {} };
         } catch (error) {
           broker.revoke(turnToken);
