@@ -107,12 +107,21 @@ section names, `off` disables).
 
 Full mode is supported: setup bootstraps the tunnel profile (`tunnel-client runtimes
 connect` → healthy → stop) and the container entrypoint then supervises a persistent
-`tunnel-client run` — the same role launchd plays on macOS. The flow is documented step
-by step in the README ("Full harness" section): create a Tunnel + runtime key on the
-OpenAI platform, `tunnel key-import`, `setup --full --tunnel-id …`, restart the
-container, then create the **Codex Native2** connector in ChatGPT Developer Mode with
-**Allow all actions**. `tunnel start/stop/restart` are intentionally disabled inside the
-container — restart the container instead; `tunnel status` and `doctor` report health.
+`tunnel-client run` — the same role launchd plays on macOS. The full seven-step flow, with
+clickable links, lives in the README ("Full harness" section):
+
+- Tunnels page: https://platform.openai.com/settings/organization/tunnels
+- API keys page: https://platform.openai.com/settings/organization/api-keys
+- ChatGPT connector settings: https://chatgpt.com/#settings/Plugins
+
+In brief: create a Tunnel + runtime key, `tunnel key-import`, `setup --full --tunnel-id …`,
+restart the container, then create the **Codex Native2** connector in ChatGPT Developer
+mode (**Type:** Tunnel, **Authentication:** None, **Allow all actions**).
+`tunnel start/stop/restart` are intentionally disabled inside the container — restart the
+container instead; `tunnel status` and `doctor` report health.
+
+Free accounts can toggle Developer mode on but may not expose the custom-connector
+creation control; if so, full mode is unavailable there and browser-only is the ceiling.
 
 ## Limitations
 

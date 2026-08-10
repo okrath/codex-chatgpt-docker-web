@@ -153,37 +153,63 @@ Tùy biến danh sách section bị cắt qua biến môi trường
 Browser-only chỉ cho model đọc ngữ cảnh; **full mode** cho phép model gọi ngược về tool
 của task Codex (đọc/ghi file, chạy lệnh) qua tunnel chính thức của OpenAI (outbound —
 không mở cổng vào). Mọi model Web trừ Pro đều có tool, **kể cả Luna**. Yêu cầu: ChatGPT
-bật được **Developer Mode**.
+bật được **Developer Mode** + tạo custom connector — đọc lưu ý về hạng tài khoản ở cuối
+mục trước khi làm.
 
-1. Trên platform.openai.com: tạo **Tunnel** (Settings → Tunnels, copy id `tunnel_...`) và
-   một **API key** thường có quyền Tunnels Read + Use — tạo miễn phí, không tốn credit.
-2. Nhập key vào container (gõ ẩn):
+**Bước 1 — Tạo Tunnel.** Mở trang Tunnels trên OpenAI platform, tạo một cái rồi copy id
+(dạng `tunnel_...`):
 
-   ```bash
-   docker compose exec -it codex-chatgpt-web codex-chatgpt-web tunnel key-import
-   ```
+  https://platform.openai.com/settings/organization/tunnels
 
-3. Chuyển sang full mode (dùng lại login ChatGPT đã lưu):
+**Bước 2 — Tạo API key** có quyền Tunnels Read + Use:
 
-   ```bash
-   docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id tunnel_YOUR_ID --acknowledge-unofficial
-   ```
+  https://platform.openai.com/settings/organization/api-keys
 
-4. Khởi động lại để container bắt đầu giám sát tunnel runtime:
+Cả 2 đều tạo miễn phí, không tốn credit model.
 
-   ```bash
-   docker compose restart codex-chatgpt-web
-   ```
+**Bước 3 — Nhập runtime key vào container** (dán key vào ô nhập ẩn):
 
-5. Trong ChatGPT: bật **Developer Mode** → tạo connector **MỚI**: loại **Tunnel**, chọn
-   đúng tunnel vừa tạo, **Authentication: None**, tên chính xác **Codex Native2**,
-   quyền **Allow all actions** (chọn "Allow low-risk actions" sẽ chặn lệnh và patch).
-6. Restart app Codex một lần, tạo task mới. Kiểm tra sức khỏe: `doctor` và
-   `tunnel status` trong container. Tunnel cần ~15–30 giây sau khi restart container mới
-   sẵn sàng — nếu `doctor` báo "Tunnel runtime is not ready" ngay sau restart, chờ chút
-   rồi chạy lại. Full mode khỏe mạnh khi doctor hiện
-   `✓ Tunnel runtime reports healthy and ready`; dòng cảnh báo connector còn lại chỉ là
-   thông tin (kiểm tra cục bộ không nhìn thấy settings ChatGPT).
+```bash
+docker compose exec -it codex-chatgpt-web codex-chatgpt-web tunnel key-import
+```
+
+**Bước 4 — Chuyển sang full mode** (dùng lại login ChatGPT đã lưu; thay id bằng id của bạn
+ở Bước 1):
+
+```bash
+docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id tunnel_YOUR_ID --acknowledge-unofficial
+```
+
+**Bước 5 — Khởi động lại để container bắt đầu giám sát tunnel runtime:**
+
+```bash
+docker compose restart codex-chatgpt-web
+```
+
+**Bước 6 — Tạo connector trong ChatGPT.** Vào **Settings → Plugins**, bật **Developer
+mode**, rồi mở dòng **Developer mode** (dòng có mũi tên `>`, KHÔNG phải toggle trong
+Security) và tạo connector **MỚI**:
+
+  https://chatgpt.com/#settings/Plugins
+
+  - **Type:** Tunnel — chọn đúng tunnel đã tạo ở Bước 1
+  - **Authentication:** None
+  - **Name:** chính xác `Codex Native2`
+  - **Permissions:** Allow all actions (chọn "Allow low-risk actions" sẽ chặn lệnh và patch)
+
+  Đừng đổi tên hay dùng lại connector **Codex Native** cũ.
+
+**Bước 7 — Restart app Codex một lần**, tạo task mới. Kiểm tra sức khỏe: `doctor` và
+`tunnel status` trong container. Tunnel cần ~15–30 giây sau khi restart container mới
+sẵn sàng — nếu `doctor` báo "Tunnel runtime is not ready" ngay sau restart, chờ chút rồi
+chạy lại. Full mode khỏe mạnh khi doctor hiện `✓ Tunnel runtime reports healthy and ready`;
+dòng cảnh báo connector còn lại chỉ là thông tin (kiểm tra cục bộ không nhìn thấy settings
+ChatGPT).
+
+> **Lưu ý về hạng tài khoản.** Tài khoản Free bật được toggle Developer mode, nhưng việc
+> tạo và dùng custom Tunnel connector có thể vẫn cần gói trả phí (Plus/Business trở lên).
+> Nếu **Settings → Plugins → Developer mode** không có nút "Create connector" nào thì full
+> mode không dùng được trên tài khoản đó — cứ ở browser-only.
 
 Quay về browser-only: `setup --browser-only --acknowledge-unofficial` rồi restart container.
 Lưu ý: trong container, `tunnel start/stop/restart` bị chặn có chủ đích — container tự

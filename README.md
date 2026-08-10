@@ -196,41 +196,63 @@ Browser-only mode gives the Web model the compiled task context but no local too
 mode connects ChatGPT's tool calls back into the active Codex task through the official
 [openai/tunnel-client](https://github.com/openai/tunnel-client) (outbound only — no open
 inbound port). All non-Pro Web models, including Luna, become tool-capable; Pro stays
-read-only. Requires **ChatGPT Developer Mode** (for the custom MCP connector).
+read-only. Requires **ChatGPT Developer Mode** with a custom MCP connector — see the
+account-tier caveat below before starting.
 
-1. On the OpenAI platform, create a **Tunnel**
-   (<https://platform.openai.com/settings/organization/tunnels>) and a regular **API key**
-   with Tunnels Read + Use (<https://platform.openai.com/settings/organization/api-keys>).
-   Both are free to create and consume no model credits.
-2. Import the runtime key into the container (hidden prompt):
+**Step 1 — Create a Tunnel.** Open the OpenAI platform Tunnels page and create one, then
+copy its id (looks like `tunnel_...`):
 
-   ```bash
-   docker compose exec -it codex-chatgpt-web codex-chatgpt-web tunnel key-import
-   ```
+  https://platform.openai.com/settings/organization/tunnels
 
-3. Switch the runtime to full mode (reuses the stored ChatGPT login):
+**Step 2 — Create an API key** with Tunnels Read + Use permission:
 
-   ```bash
-   docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id tunnel_YOUR_ID --acknowledge-unofficial
-   ```
+  https://platform.openai.com/settings/organization/api-keys
 
-4. Restart so the container starts supervising the tunnel runtime:
+Both are free to create and consume no model credits.
 
-   ```bash
-   docker compose restart codex-chatgpt-web
-   ```
+**Step 3 — Import the runtime key into the container** (paste the key at the hidden prompt):
 
-5. In ChatGPT settings, enable **Developer Mode**, then create a **new** connector:
-   type **Tunnel**, select that exact tunnel, **Authentication: None**, named exactly
-   **Codex Native2**, and set its permissions to **Allow all actions** (**Allow low-risk
-   actions** blocks commands and patches). Do not rename or reuse an older **Codex
-   Native** connector.
-6. Restart the Codex app once and start a new task. Check health any time with
-   `codex-chatgpt-web doctor` and `codex-chatgpt-web tunnel status` inside the container.
-   The tunnel takes ~15–30 seconds to come up after a container restart, so an immediate
-   `doctor` may briefly report "Tunnel runtime is not ready" — run it again.
-   A healthy full-mode doctor ends with `✓ Tunnel runtime reports healthy and ready`; the
-   remaining connector notice is informational (local checks cannot see ChatGPT settings).
+```bash
+docker compose exec -it codex-chatgpt-web codex-chatgpt-web tunnel key-import
+```
+
+**Step 4 — Switch the runtime to full mode** (reuses the stored ChatGPT login; replace the
+id with your own from Step 1):
+
+```bash
+docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id tunnel_YOUR_ID --acknowledge-unofficial
+```
+
+**Step 5 — Restart so the container starts supervising the tunnel runtime:**
+
+```bash
+docker compose restart codex-chatgpt-web
+```
+
+**Step 6 — Create the ChatGPT connector.** In ChatGPT, open **Settings → Plugins**, enable
+**Developer mode**, then open the **Developer mode** row (the one with a `>`, not the
+Security toggle) and create a **new** connector:
+
+  https://chatgpt.com/#settings/Plugins
+
+  - **Type:** Tunnel — select that exact tunnel from Step 1
+  - **Authentication:** None
+  - **Name:** exactly `Codex Native2`
+  - **Permissions:** Allow all actions (**Allow low-risk actions** blocks commands and patches)
+
+  Do not rename or reuse an older **Codex Native** connector.
+
+**Step 7 — Restart the Codex app once** and start a new task. Check health any time with
+`codex-chatgpt-web doctor` and `codex-chatgpt-web tunnel status` inside the container. The
+tunnel takes ~15–30 seconds to come up after a container restart, so an immediate `doctor`
+may briefly report "Tunnel runtime is not ready" — run it again. A healthy full-mode doctor
+ends with `✓ Tunnel runtime reports healthy and ready`; the remaining connector notice is
+informational (local checks cannot see ChatGPT settings).
+
+> **Account-tier caveat.** Free accounts can toggle Developer mode on, but creating and
+> using a custom Tunnel connector may still require a paid tier (Plus/Business or higher).
+> If **Settings → Plugins → Developer mode** shows no "Create connector" control, full mode
+> is unavailable on that account — stay on browser-only.
 
 To go back: `setup --browser-only --acknowledge-unofficial` and restart the container.
 
