@@ -12,8 +12,7 @@ interface PackageJson {
 const root = resolve(import.meta.dir, "..");
 const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as PackageJson;
 const argumentsList = process.argv.slice(2);
-const includeLauncher = argumentsList.includes("--include-launcher");
-const destinationArgument = argumentsList.find(argument => argument !== "--include-launcher");
+const destinationArgument = argumentsList[0];
 const visited = new Map<string, { directory: string; manifest: PackageJson }>();
 const bundledLicenseOverrides = new Map([
   ["tiktoken@1.0.22", join(root, "LICENSES", "tiktoken-MIT.txt")],
@@ -46,11 +45,6 @@ function visit(name: string, from: string, optional = false): void {
 }
 
 for (const dependency of Object.keys(rootPackage.dependencies ?? {})) visit(dependency, root);
-if (includeLauncher) {
-  const launcherRoot = join(root, "launcher");
-  const launcherPackage = JSON.parse(readFileSync(join(launcherRoot, "package.json"), "utf8")) as PackageJson;
-  for (const dependency of Object.keys(launcherPackage.dependencies ?? {})) visit(dependency, launcherRoot);
-}
 
 function licenseFiles(directory: string): string[] {
   return readdirSync(directory)

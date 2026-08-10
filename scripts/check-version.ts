@@ -20,24 +20,11 @@ if (packageJson.devDependencies?.["@types/bun"] !== bunVersion) {
 if (packageJson.engines?.bun !== bunVersion) throw new Error(`engines.bun is not synchronized to ${bunVersion}`);
 const expected = [
   ["src/version.ts", `export const VERSION = ${JSON.stringify(packageVersion)};`],
-  ["scripts/install.sh", `VERSION=\"\${CODEX_CHATGPT_WEB_VERSION:-${packageVersion}}\"`],
-  ["README.md", `requires Bun ${bunVersion}.`],
-  ["README.zh-CN.md", `Bun ${bunVersion}`],
-  ["scripts/install.sh", `Bun-${bunVersion}.md`],
   ["scripts/generate-third-party-notices.ts", `Bun ${bunVersion}`],
-  ["scripts/prepare-windows-baseline-bun.ps1", `bun-v$Version`],
+  ["docker/Dockerfile", `oven/bun:${bunVersion}`],
   [".github/workflows/ci.yml", `bun-version: ${bunVersion}`],
-  [".github/workflows/ci.yml", `-Version ${bunVersion}`],
-  [".github/workflows/release.yml", `Bun-${bunVersion}.md`],
-  [".github/workflows/release.yml", `-Version ${bunVersion}`],
 ] as const;
 for (const [path, needle] of expected) {
   if (!readFileSync(resolve(root, path), "utf8").includes(needle)) throw new Error(`${path} is not synchronized to ${packageVersion}`);
 }
-const releaseWorkflow = readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8");
-if (releaseWorkflow.split(`bun-version: ${bunVersion}`).length - 1 !== 2) {
-  throw new Error(`release.yml must pin Bun ${bunVersion} in both jobs`);
-}
-const launcherVersion = (JSON.parse(readFileSync(resolve(root, "launcher/package.json"), "utf8")) as { version?: string }).version;
-if (launcherVersion !== packageVersion) throw new Error(`launcher/package.json is not synchronized to ${packageVersion}`);
 process.stdout.write(`VERSION_SYNC_OK ${packageVersion} bun@${bunVersion}\n`);

@@ -1,6 +1,3 @@
-paths:
-  .github/workflows/release.yml:
-    # GitHub added this standard public-repository Intel label after actionlint v1.7.7's label table.
-    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
-    ignore:
-      - 'label "macos-15-intel" is unknown'
+# No lint exceptions are currently needed; the release workflow that required one
+# was removed together with the native packaging path.
+{}

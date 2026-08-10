@@ -10,41 +10,33 @@ permissions:
 
 jobs:
   verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Validate launcher installer with Windows PowerShell 5.1
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          if ($PSVersionTable.PSVersion.Major -ne 5) {
-            throw "Expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)"
-          }
-          $source = Get-Content scripts/install-launcher.ps1 -Raw
-          [void][scriptblock]::Create($source)
-          if (-not [Environment]::Is64BitOperatingSystem) {
-            throw "The Windows CI runner must be 64-bit"
-          }
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - run: bun install --frozen-lockfile
-        working-directory: launcher
-      - name: Prepare AVX2-independent Windows runtime
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/prepare-windows-baseline-bun.ps1 -Version 1.3.14 -GitHubEnv $env:GITHUB_ENV
       - run: bun run verify
-      - run: bun run app:package
-      - name: Ensure virtual display is available
-        if: runner.os == 'Linux'
-        run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb)
-      - run: bun run app:smoke
+
+  docker-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the Docker runtime image
+        run: docker build -f docker/Dockerfile -t codex-chatgpt-web:ci .
+      - name: Smoke the container entrypoint dependencies
+        run: |
+          docker run --rm --entrypoint /bin/bash codex-chatgpt-web:ci -lc '
+            set -e
+            command -v Xvfb
+            command -v x11vnc
+            command -v websockify
+            command -v socat
+            command -v curl
+            /usr/local/bin/chromium-no-sandbox --version
+            bun /app/src/cli.ts --version
+          '
 
   actionlint:
     runs-on: ubuntu-latest
