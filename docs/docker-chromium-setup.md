@@ -121,9 +121,10 @@ mode (**Type:** Tunnel, **Authentication:** None, **Allow all actions**).
 container instead; `tunnel status` and `doctor` report health.
 
 Free accounts work: Developer mode and custom Tunnel connectors are available on the free
-ChatGPT tier (verified). To create the connector: Settings → Plugins → Developer mode row
-(`>`) → Create → Type Tunnel, select the tunnel, Authentication None, Name exactly
-`Codex Native2`, then set Permissions to Allow all actions. The Plugins row should then read
+ChatGPT tier (verified). To create the connector: enable Developer mode under Settings →
+Security and login, then Settings → Plugins → **Create connector** (top of the Plugins
+panel) → Type Tunnel, select the tunnel, Authentication None, Name exactly `Codex Native2`,
+then set Permissions to Allow all actions. The Plugins row should then read
 `Codex Native2 — Connected · Allow all`.
 
 ## Limitations

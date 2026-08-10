@@ -267,9 +267,8 @@ docker compose restart codex-chatgpt-web
 
   1. Enable **Developer mode** first: **Settings → Security and login → Developer mode**
      (flip the toggle on; it shows an "Elevated risk" label).
-  2. Open **Settings → Plugins**. The add-connector control lives on the Plugins panel
-     itself (not inside the "Developer mode" row) — click the add / **Create connector**
-     control there.
+  2. Open **Settings → Plugins**. The **Create connector** control is at the **top of the
+     Plugins panel** (not inside the "Developer mode" row) — click it there.
   3. Fill the form:
      - **Type / MCP server:** Tunnel — select the exact tunnel you created in Step 1
      - **Authentication:** None

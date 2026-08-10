@@ -220,8 +220,8 @@ trên màn hình noVNC hoặc trình duyệt của bạn):
 
   1. Bật **Developer mode** trước: **Settings → Security and login → Developer mode**
      (gạt toggle sang bật; sẽ có nhãn "Elevated risk").
-  2. Vào **Settings → Plugins**. Nút thêm connector nằm ngay ở panel Plugins này (không
-     phải chui vào dòng "Developer mode") — nhấn nút thêm/**Create connector**.
+  2. Vào **Settings → Plugins**. Nút **Create connector** nằm ở **góc trên panel Plugins**
+     (không phải chui vào dòng "Developer mode") — nhấn nút đó.
   3. Điền form:
      - **Type / MCP server:** Tunnel — chọn đúng tunnel đã tạo ở Bước 1
      - **Authentication:** None
