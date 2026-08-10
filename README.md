@@ -227,6 +227,10 @@ read-only. Requires **ChatGPT Developer Mode** (for the custom MCP connector).
    Native** connector.
 6. Restart the Codex app once and start a new task. Check health any time with
    `codex-chatgpt-web doctor` and `codex-chatgpt-web tunnel status` inside the container.
+   The tunnel takes ~15–30 seconds to come up after a container restart, so an immediate
+   `doctor` may briefly report "Tunnel runtime is not ready" — run it again.
+   A healthy full-mode doctor ends with `✓ Tunnel runtime reports healthy and ready`; the
+   remaining connector notice is informational (local checks cannot see ChatGPT settings).
 
 To go back: `setup --browser-only --acknowledge-unofficial` and restart the container.
 

@@ -179,7 +179,11 @@ bật được **Developer Mode**.
    đúng tunnel vừa tạo, **Authentication: None**, tên chính xác **Codex Native2**,
    quyền **Allow all actions** (chọn "Allow low-risk actions" sẽ chặn lệnh và patch).
 6. Restart app Codex một lần, tạo task mới. Kiểm tra sức khỏe: `doctor` và
-   `tunnel status` trong container.
+   `tunnel status` trong container. Tunnel cần ~15–30 giây sau khi restart container mới
+   sẵn sàng — nếu `doctor` báo "Tunnel runtime is not ready" ngay sau restart, chờ chút
+   rồi chạy lại. Full mode khỏe mạnh khi doctor hiện
+   `✓ Tunnel runtime reports healthy and ready`; dòng cảnh báo connector còn lại chỉ là
+   thông tin (kiểm tra cục bộ không nhìn thấy settings ChatGPT).
 
 Quay về browser-only: `setup --browser-only --acknowledge-unofficial` rồi restart container.
 Lưu ý: trong container, `tunnel start/stop/restart` bị chặn có chủ đích — container tự
