@@ -100,11 +100,12 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   Every Luna turn drops harness-only rule sections from the compiled context (ClaudeKit-style
   `## Rule:` bundles such as slash-command skill routing tables, hook protocols, and
   agent-team rules — instructions a Web model cannot execute). If the turn still exceeds the
-  budget the bridge escalates, in order: **(1)** condense the remaining rule sections to
-  their first paragraph, **(2)** trim older completed tool results (keeping the most recent
-  ones and the in-flight round) to a short placeholder, and **(3)** as a last resort, elide
-  older user/assistant history (developer contracts and recent messages are always kept).
-  This keeps long, tool-heavy threads alive instead of dead-ending on
+  budget the bridge escalates with shrinking keep-windows until it fits: **(1)** condense the
+  remaining rule sections to their first paragraph, **(2)** trim older completed tool results
+  to a short placeholder, and **(3)** elide older history — down toward just the current turn
+  if needed (recent messages are kept; older developer contracts are dropped only at the
+  deepest step; the in-flight round is always kept). A ~340k-token thread compiles down to
+  ~17k this way. This keeps long, tool-heavy threads alive instead of dead-ending on
   *"ran out of room in the model's context window"* — the reported usage reflects the
   slimmed payload, so Codex won't retire a thread the transport still carries. Files on disk
   are never modified — slimming applies only to the copy sent to the browser, and normal

@@ -146,7 +146,7 @@ test("trimming is a no-op when there are no older completed tool results", () =>
   expect(trimOldLunaToolResults(messages, undefined, 4)).toBeUndefined();
 });
 
-test("history elision keeps recent messages and every developer message verbatim", () => {
+test("history elision keeps recent messages and, by default, developer messages verbatim", () => {
   const dev = { role: "developer", content: `contract ${BIG}`, timestamp: 0 } as CodexMessage;
   const messages: CodexMessage[] = [
     userMessage(`old user ${BIG}`),
@@ -157,9 +157,23 @@ test("history elision keeps recent messages and every developer message verbatim
   const result = elideOldLunaHistory(messages, undefined, 1);
   expect(result).toBeDefined();
   expect((result!.messages[0]!.content as string)).toContain("trimmed by the bridge");
-  expect(result!.messages[1]!.content).toBe(`contract ${BIG}`); // developer never elided
+  expect(result!.messages[1]!.content).toBe(`contract ${BIG}`); // developer kept by default
   expect(result!.messages[3]!.content).toBe(`recent ${BIG}`); // kept recent
   expect(result!.elidedCount).toBeGreaterThan(0);
+});
+
+test("the deepest step elides older developer contracts too", () => {
+  const dev = { role: "developer", content: `contract ${BIG}`, timestamp: 0 } as CodexMessage;
+  const messages: CodexMessage[] = [
+    userMessage(`old user ${BIG}`),
+    dev,
+    assistantMessage(`old answer ${BIG}`),
+    userMessage(`recent ${BIG}`),
+  ];
+  const result = elideOldLunaHistory(messages, undefined, 1, true);
+  expect(result).toBeDefined();
+  expect((result!.messages[1]!.content as string)).toContain("trimmed by the bridge"); // developer elided
+  expect(result!.messages[3]!.content).toBe(`recent ${BIG}`); // recent still kept
 });
 
 test("the slimming summary names every applied action and reports the budget outcome", () => {

@@ -171,10 +171,10 @@ Fork này xử lý **tự động** khi model là Luna, cắt theo thứ tự le
    `## Rule:` kiểu ClaudeKit như bảng routing skill `/ck:`, hook protocol, luật Agent
    Team — model Web không dùng được chúng).
 2. Nếu vẫn vượt → **tóm tắt** các section quy tắc còn lại về đoạn mở đầu.
-3. Nếu vẫn vượt → **cắt kết quả tool cũ** (thay bằng ghi chú ngắn), giữ nguyên các kết quả
-   gần nhất và round đang chạy dở.
-4. Cuối cùng, nếu vẫn vượt → **lược lịch sử user/assistant cũ** (luôn giữ developer contract
-   và các message gần nhất).
+3. Nếu vẫn vượt → **cắt kết quả tool cũ** (thay bằng ghi chú ngắn).
+4. Nếu vẫn vượt → **lược lịch sử cũ**, thu hẹp dần cho tới khi vừa — gần như chỉ còn turn
+   hiện tại nếu cần (luôn giữ các message gần nhất + round đang chạy dở; developer contract
+   cũ chỉ bị lược ở bước sâu nhất). Một thread ~340k token nén được xuống ~17k theo cách này.
 
 Nhờ tầng 3–4, thread dài nhiều tool **không còn chết** ở lỗi "ran out of room" — usage báo
 về Codex là con số sau khi cắt nên Codex cũng không tự loại bỏ thread. Đánh đổi: model

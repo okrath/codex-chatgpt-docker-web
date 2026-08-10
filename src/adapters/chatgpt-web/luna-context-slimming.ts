@@ -247,19 +247,24 @@ export function trimOldLunaToolResults(
 
 /**
  * Last resort for very long threads: elide the contents of older user,
- * assistant, and tool-result history. The most recent messages and every
- * developer message (contracts, skill instructions) are kept verbatim.
+ * assistant, and tool-result history. The most recent messages are kept
+ * verbatim. Developer messages (contracts, skill instructions) are kept by
+ * default, and only elided when `elideDevelopers` is set for the deepest
+ * escalation step — the turn's trusted environment is resolved separately and
+ * cached per thread, so eliding contract text here does not break full mode.
  */
 export function elideOldLunaHistory(
   messages: readonly CodexMessage[],
   modelId?: string,
   keepRecent = LUNA_KEEP_RECENT_MESSAGES,
+  elideDevelopers = false,
 ): { messages: CodexMessage[]; elidedCount: number; estTokensRemoved: number } | undefined {
   const cutoff = Math.min(Math.max(0, messages.length - keepRecent), currentRoundStartIndex(messages));
   let estTokensRemoved = 0;
   let elidedCount = 0;
   const next = messages.map((message, index) => {
-    if (index >= cutoff || message.role === "developer") return message;
+    if (index >= cutoff) return message;
+    if (message.role === "developer" && !elideDevelopers) return message;
     const tokens = estimateTokens(messageText(message), modelId);
     if (tokens < LUNA_TRIM_MIN_TOKENS) return message;
     estTokensRemoved += tokens;
@@ -352,24 +357,36 @@ export function compileLunaBudgetedPrompt(
     }
   }
 
-  if (result.estimatedTokens > budget) {
-    const trimmed = trimOldLunaToolResults(working.context.messages, parsed.modelId);
+  // Escalate trimming and history elision with shrinking keep-windows until the
+  // turn fits (or nothing is left to cut but the protected current round). Each
+  // step only touches content the previous step left verbatim, so re-running
+  // with a smaller window removes strictly more. The final step elides older
+  // developer contracts too — the deepest cut, approaching "only the current
+  // turn survives" (what clearing the thread would leave), done automatically.
+  const escalation: Array<{ tool: number; hist: number; elideDevelopers: boolean }> = [
+    { tool: LUNA_KEEP_RECENT_TOOL_RESULTS, hist: LUNA_KEEP_RECENT_MESSAGES, elideDevelopers: false },
+    { tool: 1, hist: 4, elideDevelopers: false },
+    { tool: 0, hist: 2, elideDevelopers: false },
+    { tool: 0, hist: 1, elideDevelopers: true },
+  ];
+  for (const step of escalation) {
+    if (result.estimatedTokens <= budget) break;
+    let changed = false;
+    const trimmed = trimOldLunaToolResults(working.context.messages, parsed.modelId, step.tool);
     if (trimmed) {
       working = withMessages(trimmed.messages);
-      result.trimmedToolResults = trimmed.trimmedCount;
-      result.trimmedToolResultTokens = trimmed.estTokensRemoved;
-      recompile();
+      result.trimmedToolResults += trimmed.trimmedCount;
+      result.trimmedToolResultTokens += trimmed.estTokensRemoved;
+      changed = true;
     }
-  }
-
-  if (result.estimatedTokens > budget) {
-    const elided = elideOldLunaHistory(working.context.messages, parsed.modelId);
+    const elided = elideOldLunaHistory(working.context.messages, parsed.modelId, step.hist, step.elideDevelopers);
     if (elided) {
       working = withMessages(elided.messages);
-      result.elidedMessages = elided.elidedCount;
-      result.elidedMessageTokens = elided.estTokensRemoved;
-      recompile();
+      result.elidedMessages += elided.elidedCount;
+      result.elidedMessageTokens += elided.estTokensRemoved;
+      changed = true;
     }
+    if (changed) recompile();
   }
 
   return result;
