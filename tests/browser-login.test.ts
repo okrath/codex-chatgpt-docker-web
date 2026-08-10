@@ -2,9 +2,24 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { browserLoginStateExists, loginToChatGpt, loginVerificationMarkerPath } from "../src/browser-login";
+import {
+  authenticatedPageNeedsTemporaryChatRedirect,
+  browserLoginStateExists,
+  loginToChatGpt,
+  loginVerificationMarkerPath,
+} from "../src/browser-login";
 import { CHATGPT_TEMPORARY_CHAT_URL } from "../src/chatgpt-session";
 import { defaultConfig } from "../src/config";
+
+test("an authenticated page parked off the Temporary Chat is steered back only on the ChatGPT origin", () => {
+  // Sign-in can land on the account home; that page must be redirected.
+  expect(authenticatedPageNeedsTemporaryChatRedirect("https://chatgpt.com/")).toBe(true);
+  expect(authenticatedPageNeedsTemporaryChatRedirect("https://chatgpt.com/c/abc123")).toBe(true);
+  expect(authenticatedPageNeedsTemporaryChatRedirect(CHATGPT_TEMPORARY_CHAT_URL)).toBe(false);
+  expect(authenticatedPageNeedsTemporaryChatRedirect("https://auth.openai.com/authorize")).toBe(false);
+  expect(authenticatedPageNeedsTemporaryChatRedirect("about:blank")).toBe(false);
+  expect(authenticatedPageNeedsTemporaryChatRedirect("not a url")).toBe(false);
+});
 
 function processIsRunning(pid: number): boolean {
   try {

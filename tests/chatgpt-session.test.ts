@@ -1,8 +1,46 @@
 import { expect, test } from "bun:test";
 import {
+  assertAuthenticatedChatGptPage,
+  CHATGPT_COMPOSER_SELECTOR,
   CHATGPT_EFFORT_CONTROL_SELECTOR,
+  CHATGPT_LOGGED_OUT_CONTROL_SELECTOR,
   detectChatGptAccountCapabilities,
 } from "../src/chatgpt-session";
+
+function fakeVisibilityLocator(visibleElements: number) {
+  return {
+    count: async () => visibleElements,
+    nth: () => ({ isVisible: async () => true }),
+  };
+}
+
+function fakePageWithVisibility(perSelector: Record<string, number>) {
+  return {
+    locator: (selector: string) => fakeVisibilityLocator(perSelector[selector] ?? 0),
+  };
+}
+
+test("an anonymous Temporary Chat with a composer is rejected as unauthenticated", async () => {
+  // The logged-out chatgpt.com surface renders a usable composer, so the
+  // assertion must reject the page while Log in/Sign up controls are visible.
+  const page = fakePageWithVisibility({
+    [CHATGPT_LOGGED_OUT_CONTROL_SELECTOR]: 2,
+    [CHATGPT_COMPOSER_SELECTOR]: 1,
+  });
+  await expect(assertAuthenticatedChatGptPage(page as never))
+    .rejects.toThrow("logged-out Log in/Sign up controls");
+});
+
+test("an authenticated composer without logged-out controls passes verification", async () => {
+  const page = fakePageWithVisibility({ [CHATGPT_COMPOSER_SELECTOR]: 1 });
+  await expect(assertAuthenticatedChatGptPage(page as never)).resolves.toBeUndefined();
+});
+
+test("a page with neither composer nor logged-out controls is rejected", async () => {
+  const page = fakePageWithVisibility({});
+  await expect(assertAuthenticatedChatGptPage(page as never))
+    .rejects.toThrow("no visible composer");
+});
 
 test("the effort selector identifies the model slider instead of any composer menu button", () => {
   expect(CHATGPT_EFFORT_CONTROL_SELECTOR).toContain('[data-animated-slider-trigger="true"]');

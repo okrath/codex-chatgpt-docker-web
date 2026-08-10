@@ -178,21 +178,45 @@ async function waitForDevToolsEndpoint(
   throw new Error(`System Chrome/Chromium did not expose its private login session within ${timeoutMs}ms`);
 }
 
+/**
+ * Some sign-in flows land the authenticated session on ChatGPT's default
+ * account surface instead of the requested Temporary Chat. Such a page is on
+ * the right origin but needs to be steered back to the Temporary Chat URL.
+ */
+export function authenticatedPageNeedsTemporaryChatRedirect(pageUrl: string): boolean {
+  let parsed: URL;
+  try { parsed = new URL(pageUrl); } catch { return false; }
+  const expected = new URL(CHATGPT_TEMPORARY_CHAT_URL);
+  if (parsed.origin !== expected.origin) return false;
+  return parsed.pathname !== expected.pathname || parsed.searchParams.get("temporary-chat") !== "true";
+}
+
+const LOGIN_REDIRECT_COOLDOWN_MS = 5_000;
+
 async function waitForAuthenticatedTemporaryChat(
   context: BrowserContext,
   browserExit: Promise<LoginBrowserExit>,
   timeoutMs: number,
 ): Promise<Page> {
   const deadline = Date.now() + timeoutMs;
+  let lastRedirectAt = 0;
   while (Date.now() < deadline) {
     for (const page of context.pages()) {
       if (page.isClosed()) continue;
+      let authenticated = false;
       try {
         await assertAuthenticatedChatGptPage(page);
+        authenticated = true;
         await assertTemporaryChatPage(page);
         return page;
       } catch {
         // Authentication redirects and provider pages are expected until the owned Temporary Chat is ready.
+      }
+      if (authenticated
+        && authenticatedPageNeedsTemporaryChatRedirect(page.url())
+        && Date.now() - lastRedirectAt > LOGIN_REDIRECT_COOLDOWN_MS) {
+        lastRedirectAt = Date.now();
+        await page.goto(CHATGPT_TEMPORARY_CHAT_URL, { waitUntil: "domcontentloaded" }).catch(() => {});
       }
     }
     const exited = await Promise.race([

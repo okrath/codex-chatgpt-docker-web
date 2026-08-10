@@ -19,6 +19,13 @@ export const CHATGPT_EFFORT_MENU_SELECTOR = [
 export const CHATGPT_EFFORT_ITEM_SELECTOR = '[role="menuitemradio"]';
 export const CHATGPT_EFFORT_SLIDER_SELECTOR = '[data-model-reasoning-effort-slider] [role="slider"]';
 export const CHATGPT_EFFORT_SLIDER_MAX_OPTIONS = 5;
+// Observed on the logged-out chatgpt.com Temporary Chat surface: it renders a
+// usable composer for anonymous visitors, so these header controls are the
+// evidence that the session is NOT authenticated.
+export const CHATGPT_LOGGED_OUT_CONTROL_SELECTOR = [
+  'button[data-testid="login-button"]',
+  'button[data-testid="signup-button"]',
+].join(", ");
 export const CHATGPT_STOP_BUTTON_SELECTOR = '[data-testid="stop-button"]';
 export const CHATGPT_COMPLETION_ACTION_SELECTOR = 'button[data-testid="copy-turn-action-button"]';
 export const CHATGPT_ASSISTANT_TURN_SELECTOR = [
@@ -68,6 +75,12 @@ async function anyVisible(locator: Locator): Promise<boolean> {
 }
 
 export async function assertAuthenticatedChatGptPage(page: Page): Promise<void> {
+  // A logged-out chatgpt.com renders a usable Temporary Chat composer for
+  // anonymous visitors, so a visible composer alone does not prove
+  // authentication; the page must also have dropped its login/signup controls.
+  if (await anyVisible(page.locator(CHATGPT_LOGGED_OUT_CONTROL_SELECTOR))) {
+    throw new Error("ChatGPT authentication could not be verified: the page still shows its logged-out Log in/Sign up controls");
+  }
   const composer = page.locator(
     CHATGPT_COMPOSER_SELECTOR,
   );
