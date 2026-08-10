@@ -229,16 +229,23 @@ docker compose exec codex-chatgpt-web codex-chatgpt-web setup --full --tunnel-id
 docker compose restart codex-chatgpt-web
 ```
 
-**Step 6 — Create the ChatGPT connector.** In ChatGPT, open **Settings → Plugins**, enable
-**Developer mode**, then open the **Developer mode** row (the one with a `>`, not the
-Security toggle) and create a **new** connector:
+**Step 6 — Create the ChatGPT connector.** This is done entirely in the ChatGPT web UI
+(open it in the noVNC screen or your own browser):
 
   https://chatgpt.com/#settings/Plugins
 
-  - **Type:** Tunnel — select that exact tunnel from Step 1
-  - **Authentication:** None
-  - **Name:** exactly `Codex Native2`
-  - **Permissions:** Allow all actions (**Allow low-risk actions** blocks commands and patches)
+  1. Open **Settings → Plugins** (the gear/avatar menu → Settings → Plugins in the sidebar).
+  2. On the Plugins panel, click the **Developer mode** row (the one with a `>` chevron —
+     not the Developer mode toggle under Security), and make sure Developer mode is on.
+  3. Click **Create** (a.k.a. "Create connector" / the **+** control) to add a new one.
+  4. Fill the form:
+     - **Type / MCP server:** Tunnel — select the exact tunnel you created in Step 1
+     - **Authentication:** None
+     - **Name:** exactly `Codex Native2` (character-for-character)
+  5. Save. Open the new connector and set **Permissions → Allow all actions**
+     (**Allow low-risk actions** blocks commands and patches).
+  6. Back on the Plugins panel the row should read **`Codex Native2 — Connected · Allow all`**,
+     and typing `@` in a chat should list **Codex Native2**.
 
   Do not rename or reuse an older **Codex Native** connector.
 
@@ -249,10 +256,12 @@ may briefly report "Tunnel runtime is not ready" — run it again. A healthy ful
 ends with `✓ Tunnel runtime reports healthy and ready`; the remaining connector notice is
 informational (local checks cannot see ChatGPT settings).
 
-> **Account-tier caveat.** Free accounts can toggle Developer mode on, but creating and
-> using a custom Tunnel connector may still require a paid tier (Plus/Business or higher).
-> If **Settings → Plugins → Developer mode** shows no "Create connector" control, full mode
-> is unavailable on that account — stay on browser-only.
+> **Free accounts work.** Developer mode and custom Tunnel connectors are available on the
+> free ChatGPT tier (verified: a free account created and connected `Codex Native2` with
+> Allow all actions). If the connector does not appear in the `@` menu right after you
+> create it, reopen the chat — it syncs within a few seconds. The error
+> `connector menu opened but exposed no row named "Codex Native2"` simply means the
+> connector was not created yet (or not named exactly `Codex Native2`).
 
 To go back: `setup --browser-only --acknowledge-unofficial` and restart the container.
 
