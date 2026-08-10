@@ -35,6 +35,37 @@ Free/Go accounts get **ChatGPT Web — Luna** in Codex's model picker; accounts 
 reasoning selector get **Instant**, **Medium**, **High**, **Extra High**, and **Pro** as
 the subscription allows.
 
+## Free ChatGPT accounts: what works and the one real limit
+
+**Full mode works on a free ChatGPT account.** This is verified end-to-end: a free-tier
+account enabled Developer mode, created the custom **Codex Native2** Tunnel connector, and
+Luna successfully called local Codex tools (reading files in the workspace) through it — no
+paid subscription required. Both browser-only mode and the full local-tool harness run on
+free Luna.
+
+**The one real constraint is the per-turn size limit, not a feature lock.** ChatGPT Free
+enforces a measured **~28,000-token budget on each single browser message**, and every
+Codex turn must be delivered as one message. This is a transport limit of the free web
+tier — it is *not* Luna's model context window (which is ~1M tokens) and cannot be raised
+from this project's side. What it means in practice:
+
+- Small, focused tasks work well: short prompts, a handful of files, shallow histories.
+- A turn overflows when the compiled context is large — a long system prompt, big global
+  instructions (e.g. a heavy `~/.codex/AGENTS.md`), many/large files pulled into context,
+  or a deep multi-turn history. Codex surfaces this as
+  *"ran out of room in the model's context window."*
+- The bridge automatically trims what it safely can (see **Luna context slimming** below),
+  but the irreducible core — Codex's system prompt, the MCP tool contract in full mode, and
+  the current turn — still has to fit within ~28k. Full mode's tool contract makes each
+  turn heavier, so the effective headroom for your own content is smaller than in
+  browser-only mode.
+- To go beyond it you must reduce the turn (trim `AGENTS.md`, start a fresh/short thread,
+  work on fewer files at a time) or use a paid ChatGPT tier, whose web transport budget is
+  substantially larger and unlocks Instant/Medium/High/Extra High.
+
+Check `docker compose logs codex-chatgpt-web` for the exact token numbers whenever a turn
+is rejected.
+
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):

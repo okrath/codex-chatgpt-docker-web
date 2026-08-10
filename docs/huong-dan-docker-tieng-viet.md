@@ -26,6 +26,33 @@
 - **Màn hình đen trên noVNC là bình thường** — đó là desktop ảo trống. Cửa sổ Chromium
   chỉ hiện khi đang đăng nhập hoặc khi Codex đang chạy một turn.
 
+## 1b. Tài khoản ChatGPT Free: làm được gì và giới hạn duy nhất
+
+**Full mode CHẠY ĐƯỢC trên tài khoản Free.** Đã kiểm chứng đầy đủ: một tài khoản Free bật
+Developer mode, tạo connector Tunnel **Codex Native2**, và Luna gọi thành công tool cục bộ
+của Codex (đọc file trong workspace) qua connector đó — **không cần gói trả phí**. Cả
+browser-only lẫn full mode (local tools) đều chạy trên Luna miễn phí.
+
+**Bất cập DUY NHẤT là giới hạn dung lượng mỗi lượt, không phải khóa tính năng.** ChatGPT
+Free giới hạn **~28.000 token cho MỖI tin nhắn browser**, và mỗi turn Codex phải gói vào
+đúng một tin nhắn. Đây là giới hạn transport của web Free — **không phải** cửa sổ ngữ cảnh
+của model Luna (~1 triệu token) và **không thể nới** từ phía dự án này. Thực tế:
+
+- Task nhỏ, gọn thì chạy tốt: prompt ngắn, vài file, lịch sử ngắn.
+- Turn bị tràn khi ngữ cảnh biên dịch quá lớn — system prompt dài, instructions toàn cục
+  nặng (ví dụ `~/.codex/AGENTS.md` đồ sộ), nhiều/lớn file được kéo vào ngữ cảnh, hoặc lịch
+  sử nhiều lượt. Codex báo là *"ran out of room in the model's context window."*
+- Bridge tự cắt gọn những gì an toàn (xem mục **cơ chế tự cắt** bên dưới), nhưng phần lõi
+  không thể cắt — system prompt của Codex, contract tool MCP (khi full mode), và turn hiện
+  tại — vẫn phải vừa ~28k. Full mode có thêm contract tool nên mỗi turn **nặng hơn**, dư
+  địa cho nội dung của bạn ít hơn so với browser-only.
+- Muốn vượt qua: giảm turn (tỉa `AGENTS.md`, mở thread mới/ngắn, làm ít file một lúc) hoặc
+  dùng gói ChatGPT trả phí — transport của gói trả phí lớn hơn nhiều và mở khóa
+  Instant/Medium/High/Extra High.
+
+Xem `docker compose logs codex-chatgpt-web` để biết con số token chính xác mỗi khi turn bị
+từ chối.
+
 ## 2. Yêu cầu
 
 - Docker Desktop đang chạy (Windows/macOS) hoặc Docker Engine + Compose v2 (Linux).
