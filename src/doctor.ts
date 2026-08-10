@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { inspectCodexIntegration } from "./codex-integration";
 import { browserLoginStateExists, loginVerificationMarkerPath } from "./browser-login";
 import { getServiceStatus } from "./service";
+import { externallySupervisedRuntime } from "./setup";
 import { tunnelStatus } from "./tunnel";
 import { getTunnelServiceStatus } from "./tunnel-service";
 import { inspectLauncherBrowserHost, readLauncherBrowserHostDescriptor } from "./launcher-browser-host";
@@ -158,7 +159,9 @@ export async function runDoctor(): Promise<DoctorReport> {
         }
       : { id: "service", status: "ok", message: "Launcher owns the background runtime" });
   } else if (!service.supported) {
-    checks.push({ id: "service", status: "warning", message: "Managed service is unavailable on this OS; keep `serve` running manually" });
+    checks.push(externallySupervisedRuntime()
+      ? { id: "service", status: "ok", message: "External supervisor (the container) owns the serve process" }
+      : { id: "service", status: "warning", message: "Managed service is unavailable on this OS; keep `serve` running manually" });
   } else if (!service.installed || !service.loaded) {
     checks.push({ id: "service", status: "error", message: "macOS background service is not installed and loaded" });
   } else {
