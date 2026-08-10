@@ -1,0 +1,8 @@
+# Whitelist: the image only needs the runtime sources and lockfile.
+*
+!package.json
+!bun.lock
+!tsconfig.json
+!src
+!docker
+docker/*.md

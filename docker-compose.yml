@@ -1,0 +1,36 @@
+services:
+  codex-chatgpt-web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: codex-chatgpt-web
+    init: true
+    restart: unless-stopped
+    # Chromium needs a large shared-memory segment.
+    shm_size: 2gb
+    ports:
+      # Responses bridge: the host port MUST stay 17841 because setup writes
+      # openai_base_url = http://127.0.0.1:17841/v1 into the Codex config.
+      - "127.0.0.1:17841:8300"
+      # noVNC screen of the container's Chromium (sign-in + watching turns).
+      - "127.0.0.1:7900:7900"
+    volumes:
+      # Persistent app home: config, ChatGPT login state, logs, diagnostics.
+      # Must be a named volume (it hosts a Unix socket in full mode).
+      - codex-chatgpt-web-home:/root/.codex-chatgpt-web
+      # Host Codex config: setup installs/uninstalls the model route here.
+      - ~/.codex:/data/codex
+    environment:
+      # Set REPLACE_CODEX_ROUTE=1 for the first boot when ~/.codex/config.toml
+      # already contains a custom or previously installed openai_base_url.
+      REPLACE_CODEX_ROUTE: "${REPLACE_CODEX_ROUTE:-0}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:17841/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First boot blocks on the interactive ChatGPT sign-in before serving.
+      start_period: 15m
+
+volumes:
+  codex-chatgpt-web-home:

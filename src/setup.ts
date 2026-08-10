@@ -64,6 +64,15 @@ export interface ExistingFullSetupCredentials {
   runtimeKey: boolean;
 }
 
+/**
+ * An external supervisor (for example the Docker container entrypoint) owns the `serve`
+ * process lifecycle, so setup must not install or restart a launchd service and cannot
+ * expect the proxy to be running yet.
+ */
+export function externallySupervisedRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CODEX_CHATGPT_WEB_EXTERNAL_SUPERVISOR === "1";
+}
+
 export function launcherCapabilityProbeRequired(
   existing: AppConfig | undefined,
   refreshAccountCapabilities = false,
@@ -266,10 +275,17 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
   const existing = loadExistingConfig();
   const config = baseConfig(existing, options);
   const launcherOwned = config.browserHost === "launcher";
-  if (!launcherOwned && process.platform !== "darwin") {
+  const externallySupervised = !launcherOwned && externallySupervisedRuntime();
+  if (!launcherOwned && process.platform !== "darwin" && !externallySupervised) {
     throw new Error(
       "Terminal-only managed Chrome setup currently requires macOS. "
-      + "Use the Codex Web GPT launcher on Windows or Linux.",
+      + "Use the Codex Web GPT launcher on Windows or Linux, or run the Docker runtime "
+      + "with CODEX_CHATGPT_WEB_EXTERNAL_SUPERVISOR=1.",
+    );
+  }
+  if (externallySupervised && config.mode === "full") {
+    throw new Error(
+      "Full mode is not supported under an externally supervised runtime yet; run setup --browser-only.",
     );
   }
   preflightCodexIntegration(config, {
@@ -359,9 +375,14 @@ export async function setup(options: SetupOptions): Promise<SetupResult> {
 
   if (!launcherOwned) {
     saveConfig(config);
-    installService(config);
-    if (changedWhileLoaded && options.restartService && existing) await restartService(existing);
-    await waitForProxy(config);
+    if (externallySupervised) {
+      // The external supervisor starts `serve` after setup returns; there is no
+      // launchd service to install and the proxy is not expected to be up yet.
+    } else {
+      installService(config);
+      if (changedWhileLoaded && options.restartService && existing) await restartService(existing);
+      await waitForProxy(config);
+    }
   }
 
   let tunnelReady: boolean | null = null;
