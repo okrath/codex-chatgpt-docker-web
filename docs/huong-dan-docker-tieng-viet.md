@@ -161,32 +161,38 @@ docker compose down -v
 
 ## 8. Tài khoản Free và cơ chế tự cắt gọn ngữ cảnh (Luna)
 
-ChatGPT Free từ chối tin nhắn đơn lẻ vượt ~**28.000 token** (giới hạn transport, không phải
-cửa sổ 1M của model). Vì mỗi turn Codex phải nhét toàn bộ ngữ cảnh vào một tin nhắn, task
-lớn có thể vượt trần này.
+Mỗi turn Codex gửi lại **toàn bộ** thread (system prompt + instructions + mọi message +
+mọi kết quả tool) dưới dạng **một** tin nhắn browser. Tài khoản Free giới hạn tin nhắn đó
+~**28.000 token** (giới hạn transport, **không phải** cửa sổ 1M của model). Thread dài
+bình thường sẽ rơi vào **vòng xoáy chết**: turn tràn → không ghi được checkpoint → turn sau
+lại gửi nguyên lịch sử quá khổ → tràn tiếp, lặp vô hạn.
 
-Fork này xử lý **tự động** khi model là Luna, cắt theo thứ tự leo thang cho tới khi vừa 28k:
+Fork này phá vòng đó bằng cách tự cắt **bản sao gửi vào browser** (không đụng file trên máy,
+không ảnh hưởng Codex dùng model thường), chỉ với model Luna, và chỉ khi turn thực sự vượt
+trần. Cắt theo tầng, dừng ngay khi vừa 28k:
 
-1. **Mọi turn Luna** đều bỏ các khối quy tắc chỉ dành cho harness cục bộ (các section
-   `## Rule:` kiểu ClaudeKit như bảng routing skill `/ck:`, hook protocol, luật Agent
-   Team — model Web không dùng được chúng).
-2. Nếu vẫn vượt → **tóm tắt** các section quy tắc còn lại về đoạn mở đầu.
-3. Nếu vẫn vượt → **gộp lịch sử cũ**: xóa hẳn và thay cả đoạn cũ bằng **một** message đánh
-   dấu duy nhất, thu hẹp dần cho tới khi vừa — gần như chỉ còn turn hiện tại nếu cần (luôn
-   giữ các message gần nhất + round đang chạy dở; developer contract cũ chỉ bị gộp ở bước
-   sâu nhất). Gộp thành 1 marker rất quan trọng: thread rất dài có hàng trăm mục, nếu để
-   một ghi chú cho mỗi mục thì riêng đống ghi chú đã tốn hàng chục nghìn token. Một thread
-   ~340k token nén được xuống ~10k theo cách này.
+1. **Bỏ các khối quy tắc harness-only.** Các section `## Rule:` kiểu ClaudeKit — bảng
+   routing skill `/ck:`, hook protocol, luật Agent Team — là chỉ dẫn cho harness khác mà
+   model Web không thực thi được, nên bị bỏ ở mọi turn Luna.
+2. **Tóm tắt các quy tắc còn lại** về tiêu đề + đoạn mở đầu.
+3. **Gộp lịch sử cũ** — đây là bước cứu thread rất dài. Thay vì để lại một ghi chú
+   "[trimmed]" cho **mỗi** message cũ (hàng trăm ghi chú như vậy tự nó đã tốn hàng chục
+   nghìn token), bridge **xóa hẳn cả đoạn cũ và thay bằng đúng MỘT marker**, ví dụ
+   `[bridge removed 1,063 older message(s) (~1,097,773 tokens) …]`. Giữ nguyên các message
+   gần nhất + round đang chạy dở, và thu hẹp cửa sổ giữ lại dần dần (8 → 4 → 2 → 1 message
+   gần nhất, chỉ gộp cả developer contract cũ ở bước sâu nhất) cho tới khi turn vừa —
+   gần như chỉ còn turn hiện tại, tức tương đương việc bạn tự "clear thread" nhưng làm tự động.
 
-Nhờ tầng 3–4, thread dài nhiều tool **không còn chết** ở lỗi "ran out of room" — usage báo
-về Codex là con số sau khi cắt nên Codex cũng không tự loại bỏ thread. Đánh đổi: model
-không còn thấy toàn văn tool/lịch sử cũ (giữ turn gần + checkpoint Luna).
+Một thread thật ~**1,12 triệu token** nén xuống **~14k** theo cách này và chạy bình thường.
+usage báo về Codex là con số sau khi cắt nên Codex cũng không tự loại bỏ thread. Dòng ✂️
+hiện trong trace của Codex khi việc cắt đã "cứu" một turn quá khổ; các lần cắt thông thường
+ghi trong log container (`docker compose logs`). Nếu cắt hết mức mà vẫn vượt, log ghi rõ
+khối nào còn nặng bao nhiêu.
 
-Việc cắt chỉ áp dụng lên **bản sao gửi vào browser** — file trên máy (AGENTS.md...) không
-bao giờ bị sửa, và Codex dùng model thường không bị ảnh hưởng. Dòng ✂️ hiện trong trace của
-Codex khi việc cắt đã "cứu" một turn quá khổ; các lần cắt thông thường ghi trong log
-container (`docker compose logs`). Nếu cắt hết mức mà vẫn vượt, log ghi rõ khối nào còn
-nặng bao nhiêu.
+**Đánh đổi:** model không còn thấy toàn văn lịch sử đã gộp — nó làm việc dựa trên các turn
+gần nhất + **checkpoint cuộn của Luna** (bản tóm tắt gọn mà bridge tự duy trì). Nên thread
+sống và mạch lạc để làm tiếp, nhưng nếu cần model nhớ chính xác chi tiết từ rất xa trong
+thread đã gộp thì không đáng tin — lúc đó mở thread mới sạch hơn.
 
 Tùy biến danh sách section bị cắt qua biến môi trường
 `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (danh sách tên cách nhau dấu phẩy; đặt `off` để tắt).

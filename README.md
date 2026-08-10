@@ -73,6 +73,43 @@ from this project's side. What it means in practice:
 Check `docker compose logs codex-chatgpt-web` for the exact token numbers whenever a turn
 is rejected.
 
+## How Luna context slimming keeps long threads alive
+
+Every Codex turn resends the whole thread — system prompt, global instructions, every past
+message, and every tool result — as one browser message. On a free account that message
+must fit ~28,000 tokens, so a long thread would normally hit a wall it can never recover
+from: the turn overflows, so no rolling checkpoint is written, so the next turn resends the
+same oversized history and overflows again. This fork breaks that loop by trimming the copy
+sent to the browser (never the files on disk, never native-model Codex usage), on Luna turns
+only, and only when a turn is actually over budget. It works in stages and stops as soon as
+the turn fits:
+
+1. **Drop harness-only rule sections.** ClaudeKit-style `## Rule:` bundles — slash-command
+   skill routing tables, hook protocols, agent-team rules — are instructions for a different
+   harness that the ChatGPT Web model cannot act on, so they are removed every Luna turn.
+2. **Condense the remaining rules.** Each surviving `## Rule:` section is cut down to its
+   heading and first paragraph.
+3. **Collapse older history.** This is the step that rescues very long threads. Instead of
+   leaving a "[trimmed]" note on each old message — hundreds of those notes would themselves
+   cost tens of thousands of tokens — the bridge **deletes the whole older span outright and
+   replaces it with a single marker**, e.g. `[bridge removed 1,063 older message(s)
+   (~1,097,773 tokens) …]`. It keeps the most recent messages and the in-flight round
+   verbatim, and shrinks the keep-window step by step (8 → 4 → 2 → 1 recent messages, folding
+   in older developer contracts only at the deepest step) until the turn finally fits —
+   approaching "just the current turn survives," which is the automatic equivalent of
+   clearing the thread yourself.
+
+A real ~1.12M-token thread compiles down to ~14k this way and runs normally. When slimming
+rescues an over-budget turn, a `✂️` line appears in the Codex trace with the before/after
+numbers; routine drops are logged to `docker compose logs`.
+
+**The trade-off:** the Web model no longer sees the full text of the collapsed history — it
+works from the recent turns plus Luna's rolling checkpoint (a compact running summary the
+bridge maintains). So the thread stays alive and coherent for continuing work, but asking it
+to recall verbatim detail from far earlier in a collapsed thread is unreliable; for that,
+starting a fresh thread is cleaner. Tune or disable the rule-section dropping with
+`CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names, or `off`).
+
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):
@@ -95,26 +132,11 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   process itself, so no launchd service is installed).
 - **A `socat` forwarder inside the container** bridges Docker port publishing to the
   Responses server, which intentionally binds `127.0.0.1` only.
-- **Luna context slimming.** ChatGPT Free rejects a single browser message above a
-  measured ~28,000-token transport budget, and every Codex turn must fit into one message.
-  Every Luna turn drops harness-only rule sections from the compiled context (ClaudeKit-style
-  `## Rule:` bundles such as slash-command skill routing tables, hook protocols, and
-  agent-team rules — instructions a Web model cannot execute). If the turn still exceeds the
-  budget the bridge escalates with shrinking keep-windows until it fits: **(1)** condense the
-  remaining rule sections to their first paragraph, then **(2)** collapse older history —
-  removing it outright and replacing the whole span with a single marker message, down
-  toward just the current turn if needed (recent messages and the in-flight round are kept;
-  older developer contracts are folded in only at the deepest step). Collapsing to one
-  marker matters: a very long thread has hundreds of items, so a per-message placeholder
-  would itself sum to tens of thousands of tokens. A ~340k-token thread compiles down to
-  ~10k this way. This keeps long, tool-heavy threads alive instead of dead-ending on
-  *"ran out of room in the model's context window"* — the reported usage reflects the
-  slimmed payload, so Codex won't retire a thread the transport still carries. Files on disk
-  are never modified — slimming applies only to the copy sent to the browser, and normal
-  Codex usage with native models is unaffected. A ✂️ line in the Codex trace reports the
-  numbers whenever slimming rescued an over-budget turn; routine strips are logged in
-  `docker compose logs`. Override the droppable section list with
-  `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated names, or `off` to disable).
+- **Luna context slimming** keeps long threads alive under ChatGPT Free's ~28k-token
+  per-message limit by dropping harness-only rule sections and collapsing older history
+  (only in the copy sent to the browser — files on disk and native-model Codex usage are
+  never touched). Full mechanism and trade-offs:
+  [How Luna context slimming keeps long threads alive](#how-luna-context-slimming-keeps-long-threads-alive).
 
 Everything else — selectors, streaming, compaction, model catalog, security checks — is
 unchanged upstream code.
