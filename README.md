@@ -73,6 +73,41 @@ from this project's side. What it means in practice:
 Check `docker compose logs codex-chatgpt-web` for the exact token numbers whenever a turn
 is rejected.
 
+### Per-turn token budgets by subscription tier
+
+The limits are already built in — upstream measured each tier's real browser transport
+boundary and the bridge picks the right one automatically from the capabilities it detects
+at sign-in. Nothing to configure:
+
+| Account | Codex models | Practical per-turn budget | vs. Free |
+| --- | --- | --- | --- |
+| **Free / Go** | Luna | **~28,000 tokens** per message (hard transport reject) | 1× |
+| **Plus** | Instant | ~32k before Codex auto-compacts (41k window) | ~1.1× |
+| **Plus** | Medium / High | **~80k** before auto-compact (90k window) | **~2.9×** |
+| **Pro** | Instant–Extra High | **~103,000 tokens** per message | ~3.7× |
+| **Pro** | Pro (max) | ~104,000 tokens per message | ~3.7× |
+
+Notes:
+
+- On Plus/Pro the account exposes the model selector, so **Luna disappears** from the
+  picker and the Luna-specific slimming/collapse machinery no longer applies — Sol models
+  use Codex's standard compaction at the thresholds above instead.
+- To switch tiers after upgrading, refresh the stored login and capabilities, then restart:
+
+  ```bash
+  docker compose exec -it codex-chatgpt-web codex-chatgpt-web setup --full --login --acknowledge-unofficial
+  ```
+
+  ```bash
+  docker compose restart codex-chatgpt-web
+  ```
+
+  Sign in with the upgraded account via noVNC; the tunnel and the **Codex Native2**
+  connector carry over unchanged. Restart the Codex app once afterwards.
+- These are empirically measured product boundaries (upstream tracks drift in
+  [#76](https://github.com/miuuyy/codex-chatgpt-web/issues/76)); OpenAI can change them,
+  but the Free < Plus < Pro ordering has been stable.
+
 ## How Luna context slimming keeps long threads alive
 
 Every Codex turn resends the whole thread — system prompt, global instructions, every past

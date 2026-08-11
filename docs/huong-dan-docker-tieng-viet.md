@@ -58,6 +58,42 @@ của model Luna (~1 triệu token) và **không thể nới** từ phía dự �
 Xem `docker compose logs codex-chatgpt-web` để biết con số token chính xác mỗi khi turn bị
 từ chối.
 
+### Giới hạn token mỗi turn theo gói tài khoản
+
+Các giới hạn này **đã có sẵn trong code** — upstream đo thực nghiệm biên transport thật của
+từng gói, và bridge tự chọn đúng giới hạn theo capability phát hiện lúc đăng nhập. Không
+cần cấu hình gì:
+
+| Gói tài khoản | Model trong Codex | Ngân sách thực tế mỗi turn | So với Free |
+| --- | --- | --- | --- |
+| **Free / Go** | Luna | **~28.000 token**/tin nhắn (transport từ chối cứng) | 1× |
+| **Plus** | Instant | ~32k trước khi Codex tự compact (cửa sổ 41k) | ~1,1× |
+| **Plus** | Medium / High | **~80k** trước khi tự compact (cửa sổ 90k) | **~2,9×** |
+| **Pro** | Instant–Extra High | **~103.000 token**/tin nhắn | ~3,7× |
+| **Pro** | Pro (max) | ~104.000 token/tin nhắn | ~3,7× |
+
+Lưu ý:
+
+- Với Plus/Pro, tài khoản có bộ chọn model nên **Luna biến mất** khỏi picker và toàn bộ cơ
+  chế cắt/gộp dành riêng cho Luna không còn áp dụng — các model Sol dùng compaction chuẩn
+  của Codex ở các ngưỡng trên.
+- Nâng gói xong, làm mới login + capability rồi restart:
+
+  ```bash
+  docker compose exec -it codex-chatgpt-web codex-chatgpt-web setup --full --login --acknowledge-unofficial
+  ```
+
+  ```bash
+  docker compose restart codex-chatgpt-web
+  ```
+
+  Đăng nhập tài khoản mới qua noVNC; tunnel và connector **Codex Native2** giữ nguyên,
+  không phải làm lại. Sau đó restart app Codex một lần.
+- Đây là các biên đo thực nghiệm trên UI ChatGPT (upstream theo dõi thay đổi ở
+  [#76](https://github.com/miuuyy/codex-chatgpt-web/issues/76)) — OpenAI có thể điều
+  chỉnh, nhưng thứ tự Free < Plus < Pro ổn định. Nếu 28k là điểm nghẽn hằng ngày,
+  **Plus (Medium/High ~80k) là nâng cấp đáng giá nhất**.
+
 ## 2. Yêu cầu
 
 - Docker Desktop đang chạy (Windows/macOS) hoặc Docker Engine + Compose v2 (Linux).
