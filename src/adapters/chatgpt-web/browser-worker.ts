@@ -258,6 +258,19 @@ export const CHATGPT_COMPOSER_DOCUMENT_END_KEY = process.platform === "darwin"
 export const CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS = 180_000;
 
 /**
+ * Per-part acknowledgement timeout. Defaults to the constant above;
+ * CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS lowers it (min 5000) to exercise the delivery-failure
+ * fallback quickly in testing without waiting out the full production timeout.
+ */
+export function chatGptPreloadResponseTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS?.trim();
+  if (!raw) return CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 5_000) return CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS;
+  return Math.min(value, CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS);
+}
+
+/**
  * Wrap one preload context chunk with a fixed acknowledge-and-wait instruction. The bridge splits
  * an over-budget turn into ordered context parts plus a final task message; each part asks the
  * model only to store the context and reply "OK". The turn does not depend on that reply — any
@@ -1140,7 +1153,7 @@ export class ChatGptBrowserWorker {
     );
 
     const completionTracker = new ChatGptCompletionTracker();
-    const responseDeadline = Date.now() + CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS;
+    const responseDeadline = Date.now() + chatGptPreloadResponseTimeoutMs();
     let lastHeartbeat = 0;
     for (;;) {
       if (page.isClosed()) throw new Error("ChatGPT browser tab was closed during context preload");
@@ -1864,7 +1877,7 @@ export class ChatGptBrowserWorker {
           await this.runStage(
             turn.traceId,
             "preamble_delivery",
-            CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS + browserStageTimeouts.send,
+            chatGptPreloadResponseTimeoutMs() + browserStageTimeouts.send,
             stageSignal => this.deliverPreambleChunk(
               page,
               chatGptPreambleMessageText(preamble[index]!, index, preamble.length),

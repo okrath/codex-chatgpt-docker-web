@@ -34,6 +34,9 @@ services:
       # Max preload parts before falling back to collapse (Free tier throttles ~3 rapid messages).
       # Empty = code default (3). Raise it only to exercise the failure/fallback path in testing.
       CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS:-}"
+      # Per-part preload acknowledgement timeout in ms (min 5000). Empty = code default (180000).
+      # Lower it only to exercise the delivery-failure fallback quickly in testing.
+      CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS:-}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:17841/healthz"]
       interval: 30s
