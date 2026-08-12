@@ -14,6 +14,20 @@ const CHATGPT_ORIGINAL_IMAGE_RESERVE_TOKENS = 8_192;
  */
 export const CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET = 28_000;
 
+/**
+ * The threshold at which Luna slimming (rule-drop, condense, preload, collapse) engages. Defaults to
+ * the measured transport budget. `CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE` lowers it (clamped to
+ * [1000, budget]) so slimming and preload can be exercised on ordinary threads for testing or tuned
+ * if the product boundary drifts; it never raises the real transport limit enforced at send time.
+ */
+export function chatGptLunaSlimmingBudget(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE?.trim();
+  if (!raw) return CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 1_000) return CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET;
+  return Math.min(value, CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
+}
+
 /** Tokens present in the one visible browser message, excluding hidden product/tool reserves. */
 export function estimateCompiledChatGptWebMessageTokens(
   compiled: CompiledChatGptWebPrompt,

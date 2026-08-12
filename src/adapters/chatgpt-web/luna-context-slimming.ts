@@ -1,7 +1,7 @@
 import type { CodexContentPart, CodexMessage, CodexParsedRequest } from "../../types";
 import { estimateTokens } from "../../lib/token-estimate";
 import {
-  CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
+  chatGptLunaSlimmingBudget,
   estimateCompiledChatGptWebInputTokens,
 } from "./input-tokens";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
@@ -520,7 +520,7 @@ export function compileLunaBudgetedPrompt(
   };
   if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return result;
 
-  const budget = CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET;
+  const budget = chatGptLunaSlimmingBudget();
   // Full mode (localTools) can serve collapsed history back through the broker, so the collapse
   // marker advertises the recall tools. The usage estimator calls this same function with the same
   // model and capabilities, so the advertised marker is counted identically in usage and delivery.

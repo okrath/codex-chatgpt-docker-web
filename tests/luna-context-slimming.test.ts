@@ -12,7 +12,7 @@ import {
   lunaPreloadEnabled,
   stripLunaRuleSection,
 } from "../src/adapters/chatgpt-web/luna-context-slimming";
-import { estimateCompiledChatGptWebInputTokens } from "../src/adapters/chatgpt-web/input-tokens";
+import { chatGptLunaSlimmingBudget, estimateCompiledChatGptWebInputTokens } from "../src/adapters/chatgpt-web/input-tokens";
 import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET } from "../src/adapters/chatgpt-web/input-tokens";
 import { CHATGPT_WEB_LUNA_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { estimateTokens } from "../src/lib/token-estimate";
@@ -248,6 +248,14 @@ test("an over-budget Luna thread converges under budget with the index inside th
   expect(result.compiled.text).toContain("Collapsed history index");
   // The last removable index in the marker is loadable from the recall store.
   expect(result.removedHistory.at(-1)!.index).toBe(result.removedHistory.length - 1);
+});
+
+test("slimming budget override lowers the threshold within bounds and never raises it", () => {
+  expect(chatGptLunaSlimmingBudget({})).toBe(28_000);
+  expect(chatGptLunaSlimmingBudget({ CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "6000" })).toBe(6_000);
+  expect(chatGptLunaSlimmingBudget({ CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "500" })).toBe(28_000);
+  expect(chatGptLunaSlimmingBudget({ CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "99999" })).toBe(28_000);
+  expect(chatGptLunaSlimmingBudget({ CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "abc" })).toBe(28_000);
 });
 
 test("preload flag parses on/1/true and defaults off", () => {
