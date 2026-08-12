@@ -197,11 +197,15 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
       ? resolve(expandUserPath(provider.chatgptWeb.lunaCheckpointStatePath))
       : undefined,
   );
+  // Turns whose preload delivery failed once; their retry compiles without preload (a single
+  // slimmed message) so a delivery failure never fails a turn slimming could have carried.
+  const preloadDisabledTurns = new Set<string>();
   const startRuntime = (
     parsed: CodexParsedRequest,
     environment: ReturnType<typeof extractChatGptTurnEnvironment> | undefined,
     traceId: string,
     turnCapabilities: ChatGptWebCapabilities,
+    disablePreload: boolean,
   ): ChatGptTurnRuntime => {
     const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, turnCapabilities);
     const identity = extractChatGptTurnIdentity(parsed);
@@ -240,6 +244,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const promptOptions: CompileChatGptWebPromptOptions = {
       captureLunaCheckpoint,
       ...(selectedSkill ? { selectedSkill: selectedSkillReference(selectedSkill) } : {}),
+      ...(disablePreload ? { disablePreload: true } : {}),
     };
     let compiledPromptTokens: number | undefined;
     const compiledPromptInputTokens = (): number => {
@@ -490,7 +495,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
       const traceId = createHash("sha256").update(executionKey).digest("hex").slice(0, 12);
       const session = chatGptTurnSessions.getOrCreate(
         executionKey,
-        () => startRuntime(parsed, environment, traceId, turnCapabilities),
+        () => startRuntime(parsed, environment, traceId, turnCapabilities, preloadDisabledTurns.has(executionKey)),
       );
       const heartbeat = setInterval(() => emit({ type: "heartbeat" }), 10_000);
       try {
@@ -670,6 +675,14 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
           }
         });
       } catch (error) {
+        if (error instanceof ChatGptWebAdapterError && error.code === "preload_delivery_failed") {
+          // Preload could not be delivered; disable it for this turn so the retry compiles a single
+          // slimmed message. Bounded so the set cannot grow without limit.
+          preloadDisabledTurns.add(executionKey);
+          while (preloadDisabledTurns.size > 512) {
+            preloadDisabledTurns.delete(preloadDisabledTurns.values().next().value!);
+          }
+        }
         if (error instanceof ChatGptWebAdapterError && !error.retryable) {
           // A deterministic request failure remains replayable so a native reconnect cannot burn
           // another browser attempt. Every other failure retires the browser session: client

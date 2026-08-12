@@ -47,9 +47,22 @@ the Web model and cost ~4-5k tokens).
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 (A3) | [Fallback on preload-delivery failure](./phase-01-preload-failure-fallback.md) | planned |
-| 2 (A2) | [Enable preload by default](./phase-02-enable-preload-by-default.md) | planned |
-| 3 (A1) | [Preserve user rule content by default](./phase-03-preserve-user-rules.md) | planned |
+| 1 (A3) | [Fallback on preload-delivery failure](./phase-01-preload-failure-fallback.md) | implemented; static green, live smoke pending |
+| 2 (A2) | [Enable preload by default](./phase-02-enable-preload-by-default.md) | implemented; static green |
+| 3 (A1) | [Preserve user rule content by default](./phase-03-preserve-user-rules.md) | implemented; static green |
+
+## Implementation notes (2026-08-12)
+
+- A3: preamble failures throw `ChatGptWebAdapterError(code=preload_delivery_failed, retryable)`;
+  the adapter records the executionKey in a bounded `preloadDisabledTurns` set and the Codex retry
+  compiles with `disablePreload`, delivering a single slimmed message. Convergence in one retry.
+- A2: `lunaPreloadEnabled` defaults on (disable with `off`/`0`/`false`); compose default flipped to
+  `on`; README promoted from experimental to default.
+- A1: no ordering change was needed — preload already runs before condense, so a user `## Rule:`
+  section is preloaded verbatim when preload is on. A regression test locks this in
+  (`condensedTokens === 0`, the rule marker present in `compiled.preamble`); the five harness-only
+  sections keep being dropped.
+- 361 tests pass, typecheck clean. Live smoke of the A3 fallback path is the remaining gate.
 
 ## Acceptance criteria
 

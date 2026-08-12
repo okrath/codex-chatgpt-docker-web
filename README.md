@@ -174,16 +174,19 @@ The checkpoint itself is a structured, carry-forward record — it keeps Objecti
 touched, Learned facts, and Open work across turns and updates them rather than rewriting each turn,
 so important detail ages out less often even before recall is needed.
 
-### Multi-message preload (experimental, opt-in)
+### Multi-message preload (on by default)
 
-An alternative to collapsing an over-budget turn: split it into ordered earlier-context messages
-plus a final task message, each within the transport budget, delivered into the same chat so the
-Web model accumulates the whole thread in its window. Enable with
-`CODEX_CHATGPT_WEB_LUNA_PRELOAD=on` (off by default; the default behavior is unchanged). Live smoke
-on a free account confirmed it works, and also found that ChatGPT Free stops acknowledging after
-about three rapid messages in one chat, so preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3)
-and a turn that would need more parts falls back to collapse. It engages only on turns that exceed
-the budget, so it never changes a turn that already fits.
+Instead of collapsing an over-budget turn into a lossy summary, the bridge splits it into ordered
+earlier-context messages plus a final task message, each within the transport budget, delivered into
+the same chat so the Web model accumulates the whole thread in its window — and user-authored
+`## Rule:` sections are carried verbatim in a preload part rather than condensed away. This is on by
+default; disable with `CODEX_CHATGPT_WEB_LUNA_PRELOAD=off`.
+
+It only engages on turns that exceed the budget, so a turn that already fits is unchanged. ChatGPT
+Free stops acknowledging after about three rapid messages in one chat (measured in live smoke), so
+preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3); a turn that would need more parts falls
+back to collapse. If a preload delivery fails mid-way, the turn is re-delivered once as a single
+slimmed message, so preload is never worse than collapse.
 
 ## What this fork changes
 

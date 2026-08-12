@@ -24,10 +24,10 @@ services:
       # Set REPLACE_CODEX_ROUTE=1 for the first boot when ~/.codex/config.toml
       # already contains a custom or previously installed openai_base_url.
       REPLACE_CODEX_ROUTE: "${REPLACE_CODEX_ROUTE:-0}"
-      # Experimental (off by default): deliver an over-budget Luna turn as ordered
-      # preload messages instead of collapsing history. Enable for a run with
-      # `CODEX_CHATGPT_WEB_LUNA_PRELOAD=on docker compose up -d`.
-      CODEX_CHATGPT_WEB_LUNA_PRELOAD: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD:-off}"
+      # On by default: deliver an over-budget Luna turn as ordered preload messages
+      # instead of collapsing history. Disable with
+      # `CODEX_CHATGPT_WEB_LUNA_PRELOAD=off docker compose up -d`.
+      CODEX_CHATGPT_WEB_LUNA_PRELOAD: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD:-on}"
       # Testing/tuning knob: lower the Luna slimming/preload threshold (min 1000) so slimming and
       # preload engage on ordinary threads. Empty = the real 28k transport budget. Never raises it.
       CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "${CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE:-}"

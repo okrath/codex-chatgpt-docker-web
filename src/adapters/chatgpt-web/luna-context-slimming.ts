@@ -367,13 +367,15 @@ function appendCollapseIndexToMarker(messages: readonly CodexMessage[], indexTex
 /**
  * Multi-message preload: instead of collapsing older history into a lossy summary, deliver it as
  * ordered earlier-context browser messages before the final task message, each within the transport
- * budget, so the model accumulates the whole thread in its (~1M) window. Off by default — set
- * CODEX_CHATGPT_WEB_LUNA_PRELOAD to on/1/true to enable. Requires the browser-side delivery loop
- * (browser-worker.ts), which is verified live.
+ * budget, so the model accumulates the whole thread in its (~1M) window. On by default; set
+ * CODEX_CHATGPT_WEB_LUNA_PRELOAD to off/0/false to disable. It only engages on turns that exceed the
+ * budget, is capped at LUNA_PRELOAD_MAX_PARTS, and a delivery failure falls back to a single slimmed
+ * message, so a fitting turn is unchanged and a failed one is never worse than collapse.
  */
 export function lunaPreloadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.CODEX_CHATGPT_WEB_LUNA_PRELOAD?.trim().toLowerCase();
-  return value === "on" || value === "1" || value === "true";
+  if (value === undefined || value === "") return true;
+  return value !== "off" && value !== "0" && value !== "false";
 }
 
 /** Fraction of the transport budget a single preload part may use, leaving room for the wrapper. */
@@ -590,7 +592,7 @@ export function compileLunaBudgetedPrompt(
   // Preload (opt-in): when the turn still exceeds the budget after dropping the harness-only rule
   // sections, deliver the older span as ordered earlier-context messages instead of collapsing it
   // into a lossy summary. Falls through to collapse when preload cannot fit the irreducible core.
-  if (result.estimatedTokens > budget && lunaPreloadEnabled()) {
+  if (result.estimatedTokens > budget && lunaPreloadEnabled() && options?.disablePreload !== true) {
     const split = splitLunaPreamble(
       working.context.messages,
       subset => compileWith(withMessages(subset)),

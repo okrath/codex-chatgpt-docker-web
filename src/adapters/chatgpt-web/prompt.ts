@@ -33,6 +33,8 @@ export interface CompiledChatGptWebPrompt {
 export interface CompileChatGptWebPromptOptions {
   captureLunaCheckpoint?: boolean;
   selectedSkill?: SelectedSkillReference;
+  /** Skip multi-message preload for this turn (set on a retry after a preload delivery failed). */
+  disablePreload?: boolean;
 }
 
 const RETIRED_TURN_HANDLE = /\b(turn|binding)_[A-Za-z0-9_-]{24,}/g;

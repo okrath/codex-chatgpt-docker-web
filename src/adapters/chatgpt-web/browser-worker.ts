@@ -1859,22 +1859,35 @@ export class ChatGptBrowserWorker {
       // part as its own message in this same chat before the final task message. Empty on normal
       // turns, so the single-message flow below is byte-identical.
       const preamble = prepared.preamble ?? [];
-      for (let index = 0; index < preamble.length; index += 1) {
-        await this.runStage(
-          turn.traceId,
-          "preamble_delivery",
-          CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS + browserStageTimeouts.send,
-          stageSignal => this.deliverPreambleChunk(
-            page,
-            chatGptPreambleMessageText(preamble[index]!, index, preamble.length),
-            index,
-            preamble.length,
-            mode,
-            turn,
-            diagnostics,
-            deadline,
-            stageSignal,
-          ),
+      try {
+        for (let index = 0; index < preamble.length; index += 1) {
+          await this.runStage(
+            turn.traceId,
+            "preamble_delivery",
+            CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS + browserStageTimeouts.send,
+            stageSignal => this.deliverPreambleChunk(
+              page,
+              chatGptPreambleMessageText(preamble[index]!, index, preamble.length),
+              index,
+              preamble.length,
+              mode,
+              turn,
+              diagnostics,
+              deadline,
+              stageSignal,
+            ),
+          );
+        }
+      } catch (error) {
+        // Cancellation is not a delivery failure. Anything else means preload could not be delivered
+        // (a throttled part timed out, the composer diverged, a dialog appeared). Classify it so the
+        // adapter retries this turn once without preload — as a single slimmed message — instead of
+        // failing a turn that would otherwise have fit.
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        if (turn.abortSignal?.aborted) throw error;
+        throw new ChatGptWebAdapterError(
+          `ChatGPT preload delivery failed: ${error instanceof Error ? error.message : String(error)}`,
+          { status: 502, errorType: "server_error", code: "preload_delivery_failed", retryable: true },
         );
       }
       await this.runStage(turn.traceId, "prompt_attachment", browserStageTimeouts.promptAttachment, () => (

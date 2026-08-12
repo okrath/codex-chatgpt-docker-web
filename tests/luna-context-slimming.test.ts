@@ -33,6 +33,22 @@ function userMessage(text: string): CodexMessage {
   return { role: "user", content: text, timestamp: 0 };
 }
 
+function withPreloadEnv<T>(vars: Record<string, string | undefined>, run: () => T): T {
+  const previous = new Map(Object.keys(vars).map(key => [key, process.env[key]]));
+  try {
+    for (const [key, value] of Object.entries(vars)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    return run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
 const RULE_BUNDLE = [
   "## Rule: CLAUDE",
   "",
@@ -240,7 +256,11 @@ test("an over-budget Luna thread converges under budget with the index inside th
   } as unknown as CodexParsedRequest;
   const capabilities = { localToolsEnabled: true, solAvailable: false, proAvailable: false };
 
-  const result = compileLunaBudgetedPrompt(parsed, capabilities, "turn_12345678901234567890123456789012");
+  // Preload defaults on; this test exercises the collapse path, so disable preload here.
+  const result = withPreloadEnv(
+    { CODEX_CHATGPT_WEB_LUNA_PRELOAD: "off" },
+    () => compileLunaBudgetedPrompt(parsed, capabilities, "turn_12345678901234567890123456789012"),
+  );
   expect(result.estimatedTokens).toBeLessThanOrEqual(CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
   expect(result.collapsedMessages).toBeGreaterThan(0);
   expect(result.removedHistory.length).toBeGreaterThan(0);
@@ -258,11 +278,14 @@ test("slimming budget override lowers the threshold within bounds and never rais
   expect(chatGptLunaSlimmingBudget({ CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "abc" })).toBe(28_000);
 });
 
-test("preload flag parses on/1/true and defaults off", () => {
-  expect(lunaPreloadEnabled({})).toBe(false);
-  expect(lunaPreloadEnabled({ CODEX_CHATGPT_WEB_LUNA_PRELOAD: "off" })).toBe(false);
-  for (const value of ["on", "1", "true", "TRUE"]) {
+test("preload flag defaults on and only an explicit off/0/false disables it", () => {
+  expect(lunaPreloadEnabled({})).toBe(true);
+  expect(lunaPreloadEnabled({ CODEX_CHATGPT_WEB_LUNA_PRELOAD: "" })).toBe(true);
+  for (const value of ["on", "1", "true", "anything"]) {
     expect(lunaPreloadEnabled({ CODEX_CHATGPT_WEB_LUNA_PRELOAD: value })).toBe(true);
+  }
+  for (const value of ["off", "0", "false", "OFF"]) {
+    expect(lunaPreloadEnabled({ CODEX_CHATGPT_WEB_LUNA_PRELOAD: value })).toBe(false);
   }
 });
 
@@ -318,12 +341,20 @@ test("an over-budget Luna turn preloads history into parts when the flag is on, 
     expect(capped.preloadParts).toBe(0);
     expect(capped.collapsedMessages).toBeGreaterThan(0);
 
-    delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+    process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = "off";
     delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS;
     const collapsed = compileLunaBudgetedPrompt(build(), capabilities, "turn_12345678901234567890123456789012");
     expect(collapsed.preloadParts).toBe(0);
     expect(collapsed.compiled.preamble).toBeUndefined();
     expect(collapsed.collapsedMessages).toBeGreaterThan(0);
+
+    // A3: an explicit disablePreload compiles a single slimmed message even with the flag on.
+    process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = "on";
+    const disabled = compileLunaBudgetedPrompt(
+      build(), capabilities, "turn_12345678901234567890123456789012", { disablePreload: true });
+    expect(disabled.preloadParts).toBe(0);
+    expect(disabled.compiled.preamble).toBeUndefined();
+    expect(disabled.collapsedMessages).toBeGreaterThan(0);
   } finally {
     if (previousFlag === undefined) delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
     else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = previousFlag;
@@ -331,6 +362,42 @@ test("an over-budget Luna turn preloads history into parts when the flag is on, 
     else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS = previousMax;
   }
 }, 20_000);
+
+test("A1: with preload on a user rule section is preloaded verbatim, not condensed", () => {
+  const ruleMarker = "ALWAYS-CITE-EXACT-PATHS";
+  const ruleBody = `## Rule: user-guidance\n\n${ruleMarker}. ${"Follow this closely. ".repeat(300)}`;
+  const build = (): CodexParsedRequest => {
+    const messages: CodexMessage[] = [developerMessage(ruleBody)];
+    for (let turn = 0; turn < 60; turn += 1) {
+      messages.push(userMessage(`turn ${turn} ${BIG}`));
+      messages.push(assistantMessage(`answer ${turn} ${BIG}`));
+    }
+    messages.push(userMessage("current task: apply the guidance"));
+    return {
+      modelId: CHATGPT_WEB_LUNA_MODEL_ID,
+      stream: true,
+      options: { reasoning: undefined },
+      context: { systemPrompt: ["You are the model backend."], messages },
+    } as unknown as CodexParsedRequest;
+  };
+  const capabilities = { localToolsEnabled: true, solAvailable: false, proAvailable: false };
+  const token = "turn_12345678901234567890123456789012";
+
+  const preloaded = withPreloadEnv(
+    { CODEX_CHATGPT_WEB_LUNA_PRELOAD: "on", CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS: "50" },
+    () => compileLunaBudgetedPrompt(build(), capabilities, token),
+  );
+  expect(preloaded.preloadParts).toBeGreaterThan(0);
+  expect(preloaded.condensedTokens).toBe(0); // condense never ran — the rule was not trimmed
+  expect(preloaded.compiled.preamble!.join("\n")).toContain(ruleMarker); // delivered verbatim
+
+  const off = withPreloadEnv(
+    { CODEX_CHATGPT_WEB_LUNA_PRELOAD: "off" },
+    () => compileLunaBudgetedPrompt(build(), capabilities, token),
+  );
+  expect(off.preloadParts).toBe(0);
+  expect(off.condensedTokens).toBeGreaterThan(0); // without preload the user rule is condensed
+});
 
 test("the slimming summary names every applied action and reports the budget outcome", () => {
   const summary = describeLunaSlimming(
