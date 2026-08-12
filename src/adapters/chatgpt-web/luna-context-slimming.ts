@@ -4,12 +4,17 @@ import {
   CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET,
   estimateCompiledChatGptWebInputTokens,
 } from "./input-tokens";
-import { CHATGPT_WEB_LUNA_MODEL_ID, type ChatGptWebCapabilities } from "./model";
+import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import {
   compileChatGptWebPrompt,
   type CompiledChatGptWebPrompt,
   type CompileChatGptWebPromptOptions,
 } from "./prompt";
+import {
+  HISTORY_LOAD_WIRE_NAME,
+  HISTORY_SEARCH_WIRE_NAME,
+  type RemovedHistoryMessage,
+} from "./history-recall";
 
 /**
  * ClaudeKit-style instruction bundles concatenate independent rule files as
@@ -207,6 +212,26 @@ function messageText(message: CodexMessage): string {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
+/** Human-readable text of a collapsed message for verbatim recall; non-text parts become placeholders. */
+function readableMessageText(message: CodexMessage): string {
+  const content = (message as { content: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map(part => {
+    const record = part as { type?: unknown; text?: unknown };
+    if (record.type === "text" && typeof record.text === "string") return record.text;
+    if (record.type === "image" || record.type === "inputImage") return "[image]";
+    return "[part]";
+  }).join("\n");
+}
+
+/** One sentence appended to the collapse marker in Full mode so the model can discover recall. */
+function collapsedHistoryRecallSentence(): string {
+  return " The removed messages are available verbatim this turn:"
+    + ` call codex_tool_call with wire_name "${HISTORY_SEARCH_WIRE_NAME}" ({"query":"…"})`
+    + ` or "${HISTORY_LOAD_WIRE_NAME}" ({"indexes":[…]}) using this turn's turn_token.`;
+}
+
 const LUNA_COLLAPSE_MIN_TOKENS = 16;
 export const LUNA_KEEP_RECENT_MESSAGES = 8;
 
@@ -227,11 +252,12 @@ export function collapseOldLunaHistory(
   modelId?: string,
   keepRecent = LUNA_KEEP_RECENT_MESSAGES,
   collapseDevelopers = false,
-): { messages: CodexMessage[]; collapsedCount: number; estTokensRemoved: number } | undefined {
+  advertiseHistoryRecall = false,
+): { messages: CodexMessage[]; collapsedCount: number; estTokensRemoved: number; removed: CodexMessage[] } | undefined {
   const cutoff = Math.min(Math.max(0, messages.length - keepRecent), currentRoundStartIndex(messages));
   if (cutoff <= 0) return undefined;
   const head: CodexMessage[] = [];
-  let collapsedCount = 0;
+  const removed: CodexMessage[] = [];
   let estTokensRemoved = 0;
   for (let index = 0; index < cutoff; index += 1) {
     const message = messages[index]!;
@@ -248,17 +274,18 @@ export function collapseOldLunaHistory(
       head.push(message);
       continue;
     }
-    collapsedCount += 1;
+    removed.push(message);
     estTokensRemoved += estimateTokens(text, modelId);
   }
-  if (collapsedCount === 0) return undefined;
+  if (removed.length === 0) return undefined;
   const marker: CodexMessage = {
     role: "user",
-    content: `${LUNA_COLLAPSE_MARKER_PREFIX} ${collapsedCount.toLocaleString("en-US")} older message(s)`
-      + ` (~${estTokensRemoved.toLocaleString("en-US")} tokens) to fit the ChatGPT Free browser transport budget]`,
+    content: `${LUNA_COLLAPSE_MARKER_PREFIX} ${removed.length.toLocaleString("en-US")} older message(s)`
+      + ` (~${estTokensRemoved.toLocaleString("en-US")} tokens) to fit the ChatGPT Free browser transport budget]`
+      + (advertiseHistoryRecall ? collapsedHistoryRecallSentence() : ""),
     timestamp: 0,
   };
-  return { messages: [...head, marker, ...messages.slice(cutoff)], collapsedCount, estTokensRemoved };
+  return { messages: [...head, marker, ...messages.slice(cutoff)], collapsedCount: removed.length, estTokensRemoved, removed };
 }
 
 export interface LunaBudgetedCompilation {
@@ -272,6 +299,8 @@ export interface LunaBudgetedCompilation {
   condensedTokens: number;
   collapsedMessages: number;
   collapsedTokens: number;
+  /** Verbatim text of every collapsed message, for fail-open recall in Full mode. */
+  removedHistory: RemovedHistoryMessage[];
 }
 
 /**
@@ -308,10 +337,20 @@ export function compileLunaBudgetedPrompt(
     condensedTokens: 0,
     collapsedMessages: 0,
     collapsedTokens: 0,
+    removedHistory: [],
   };
   if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return result;
 
   const budget = CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET;
+  // Full mode (localTools) can serve collapsed history back through the broker, so the collapse
+  // marker advertises the recall tools. The usage estimator calls this same function with the same
+  // model and capabilities, so the advertised marker is counted identically in usage and delivery.
+  const advertiseHistoryRecall = resolveChatGptWebModelMode(
+    parsed.modelId,
+    parsed.options.reasoning,
+    capabilities,
+  ).localTools;
+  const removedHistoryMessages: CodexMessage[] = [];
   const recompile = (): void => {
     result.compiled = compileWith(working);
     result.estimatedTokens = estimateCompiledChatGptWebInputTokens(result.compiled, parsed.modelId);
@@ -356,8 +395,12 @@ export function compileLunaBudgetedPrompt(
       parsed.modelId,
       step.keepRecent,
       step.collapseDevelopers,
+      advertiseHistoryRecall,
     );
     if (!collapsed) continue;
+    // Each step peels the older side of what the previous step kept, so appending yields the
+    // collapsed messages in roughly chronological order; the index is a stable per-turn id.
+    removedHistoryMessages.push(...collapsed.removed);
     working = withMessages(collapsed.messages);
     recompile();
   }
@@ -365,6 +408,11 @@ export function compileLunaBudgetedPrompt(
     result.collapsedMessages = preCollapseCount - working.context.messages.length;
     result.collapsedTokens = Math.max(0, preCollapseTokens - result.estimatedTokens);
   }
+  result.removedHistory = removedHistoryMessages.map((message, index) => ({
+    index,
+    role: message.role,
+    text: readableMessageText(message),
+  }));
 
   return result;
 }

@@ -163,6 +163,24 @@ test("collapse is a no-op when nothing precedes the keep window / current round"
   expect(collapseOldLunaHistory(messages, undefined, 8)).toBeUndefined();
 });
 
+test("collapse returns the verbatim removed messages and advertises recall only when asked", () => {
+  const messages: CodexMessage[] = [
+    userMessage(`first old ${BIG}`),
+    toolResult("t1", `second old ${BIG}`),
+    assistantMessage(`answer ${BIG}`),
+    userMessage(`recent ${BIG}`),
+  ];
+  const plain = collapseOldLunaHistory(messages, undefined, 1);
+  expect(plain).toBeDefined();
+  expect(plain!.removed.map(m => m.role)).toEqual(["user", "toolResult", "assistant"]);
+  expect(plain!.removed[0]!.content).toBe(`first old ${BIG}`);
+  expect(plain!.messages[0]!.content).not.toContain("codex_tool_call");
+
+  const advertised = collapseOldLunaHistory(messages, undefined, 1, false, true);
+  expect(advertised!.messages[0]!.content).toContain("__codex_search_collapsed_history_v1");
+  expect(advertised!.messages[0]!.content).toContain("__codex_load_collapsed_history_v1");
+});
+
 test("the slimming summary names every applied action and reports the budget outcome", () => {
   const summary = describeLunaSlimming(
     {

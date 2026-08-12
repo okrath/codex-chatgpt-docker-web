@@ -5,6 +5,18 @@ import { dirname } from "node:path";
 import { isWindowsPipeEndpoint } from "../../config";
 import type { ChatGptTurnEnvironment } from "./environment";
 import { loadedSelectedSkill, type SelectedSkillPacket } from "./selected-skill";
+import {
+  COLLAPSED_HISTORY_STORE_BYTE_CAP,
+  HISTORY_LOAD_MAX_INDEXES,
+  HISTORY_LOAD_RESPONSE_CHAR_CAP,
+  HISTORY_SEARCH_LIMIT_DEFAULT,
+  HISTORY_SEARCH_LIMIT_MAX,
+  HISTORY_SEARCH_QUERY_MAX_CHARS,
+  HISTORY_SEARCH_QUERY_MIN_CHARS,
+  HISTORY_SEARCH_SNIPPET_RADIUS,
+  type CollapsedHistorySearchMatch,
+  type RemovedHistoryMessage,
+} from "./history-recall";
 
 interface PendingTurn extends ChatGptTurnEnvironment {
   expiresAt?: number;
@@ -50,6 +62,7 @@ interface TurnChannel {
     packet: SelectedSkillPacket;
     state: "pending" | "loaded" | "acknowledged";
   };
+  collapsedHistory?: RemovedHistoryMessage[];
   finalized?: boolean;
 }
 
@@ -74,7 +87,7 @@ export class ChatGptTurnFinalizationError extends Error {
 
 interface BrokerRequest {
   id: string;
-  method: "claim" | "resolve" | "release" | "invoke" | "load_skill" | "ack_skill";
+  method: "claim" | "resolve" | "release" | "invoke" | "load_skill" | "ack_skill" | "search_history" | "load_history";
   token?: string;
   bindingId?: string;
   wireName?: string;
@@ -82,6 +95,9 @@ interface BrokerRequest {
   arguments?: Record<string, unknown>;
   input?: string;
   sha256?: string;
+  query?: string;
+  limit?: number;
+  indexes?: number[];
 }
 
 interface BrokerResponse {
@@ -237,6 +253,28 @@ export class TurnBroker {
     invocation.resolve(result);
   }
 
+  /**
+   * Store the verbatim messages that Luna slimming collapsed this turn so the browser model can
+   * recall them read-only through the reserved history wire names. Fail-soft: a store larger than
+   * the byte cap is skipped and the turn proceeds without recall. Idempotent-guarded: a channel
+   * cannot be re-attached.
+   */
+  attachCollapsedHistory(token: string, messages: RemovedHistoryMessage[]): void {
+    const channel = this.channels.get(token);
+    if (!channel) throw new Error("turn token is invalid or expired");
+    if (channel.collapsedHistory) throw new Error("Collapsed history is already attached for this turn");
+    if (messages.length === 0) return;
+    const bytes = messages.reduce((total, message) => total + Buffer.byteLength(message.text, "utf8"), 0);
+    if (bytes > COLLAPSED_HISTORY_STORE_BYTE_CAP) {
+      console.warn(
+        `[chatgpt-web] collapsed history (${bytes.toLocaleString("en-US")} bytes) exceeds the`
+        + ` ${COLLAPSED_HISTORY_STORE_BYTE_CAP.toLocaleString("en-US")}-byte recall cap; recall disabled for this turn`,
+      );
+      return;
+    }
+    channel.collapsedHistory = messages;
+  }
+
   finalize(token: string): void {
     this.prune();
     const channel = this.channels.get(token);
@@ -271,6 +309,8 @@ export class TurnBroker {
       this.retire(this.retiredBindings, channel.bindingId, channel.traceId);
     }
     this.retire(this.retiredTokens, token, channel.traceId);
+    channel.collapsedHistory = undefined;
+    channel.selectedSkill = undefined;
     this.rejectChannel(channel, new Error("Codex turn binding was revoked"));
   }
 
@@ -432,9 +472,59 @@ export class TurnBroker {
       && request.method !== "release"
       && request.method !== "invoke"
       && request.method !== "load_skill"
-      && request.method !== "ack_skill") {
+      && request.method !== "ack_skill"
+      && request.method !== "search_history"
+      && request.method !== "load_history") {
       throw new Error("turn broker method is invalid");
     }
+  }
+
+  private searchCollapsedHistory(history: RemovedHistoryMessage[], query: unknown, limit: unknown): { matches: CollapsedHistorySearchMatch[] } {
+    if (typeof query !== "string") throw new Error("history search requires a string query");
+    const needle = query.trim();
+    if (needle.length < HISTORY_SEARCH_QUERY_MIN_CHARS || needle.length > HISTORY_SEARCH_QUERY_MAX_CHARS) {
+      throw new Error(`history search query must be ${HISTORY_SEARCH_QUERY_MIN_CHARS}..${HISTORY_SEARCH_QUERY_MAX_CHARS} characters`);
+    }
+    let cap = HISTORY_SEARCH_LIMIT_DEFAULT;
+    if (limit !== undefined) {
+      if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > HISTORY_SEARCH_LIMIT_MAX) {
+        throw new Error(`history search limit must be an integer 1..${HISTORY_SEARCH_LIMIT_MAX}`);
+      }
+      cap = limit;
+    }
+    const lowered = needle.toLowerCase();
+    const matches: CollapsedHistorySearchMatch[] = [];
+    for (const message of history) {
+      if (matches.length >= cap) break;
+      const at = message.text.toLowerCase().indexOf(lowered);
+      if (at < 0) continue;
+      const start = Math.max(0, at - HISTORY_SEARCH_SNIPPET_RADIUS);
+      const end = Math.min(message.text.length, at + lowered.length + HISTORY_SEARCH_SNIPPET_RADIUS);
+      const snippet = (start > 0 ? "…" : "") + message.text.slice(start, end) + (end < message.text.length ? "…" : "");
+      matches.push({ index: message.index, role: message.role, snippet, chars: message.text.length });
+    }
+    return { matches };
+  }
+
+  private loadCollapsedHistory(history: RemovedHistoryMessage[], indexes: unknown): { messages: RemovedHistoryMessage[]; truncated: boolean } {
+    if (!Array.isArray(indexes) || indexes.length === 0) throw new Error("history load requires a non-empty indexes array");
+    if (indexes.length > HISTORY_LOAD_MAX_INDEXES) throw new Error(`history load accepts at most ${HISTORY_LOAD_MAX_INDEXES} indexes per call`);
+    const messages: RemovedHistoryMessage[] = [];
+    let used = 0;
+    let truncated = false;
+    for (const raw of indexes) {
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0 || raw >= history.length) {
+        throw new Error(`history index ${String(raw)} is out of range for this turn`);
+      }
+      const source = history[raw]!;
+      const remaining = HISTORY_LOAD_RESPONSE_CHAR_CAP - used;
+      if (remaining <= 0) { truncated = true; break; }
+      const text = source.text.length > remaining ? source.text.slice(0, remaining) : source.text;
+      if (text.length < source.text.length) truncated = true;
+      used += text.length;
+      messages.push({ index: source.index, role: source.role, text });
+    }
+    return { messages, truncated };
   }
 
   private selectedSkillSummary(channel: TurnChannel): BrokerSelectedSkillSummary | undefined {
@@ -529,6 +619,19 @@ export class TurnBroker {
       if (selected.state === "pending") throw new Error("Selected skill must be loaded before acknowledgement");
       selected.state = "acknowledged";
       return { acknowledged: true, sha256: selected.packet.sha256 };
+    }
+
+    if (request.method === "search_history" || request.method === "load_history") {
+      if (binding.channel.finalized) throw new Error("Codex turn is already finalized");
+      if (binding.channel.selectedSkill?.state !== undefined
+        && binding.channel.selectedSkill.state !== "acknowledged") {
+        throw new Error("Selected skill must be loaded and acknowledged before native Codex actions");
+      }
+      const history = binding.channel.collapsedHistory;
+      if (!history || history.length === 0) throw new Error("This Codex turn has no collapsed history to recall");
+      return request.method === "search_history"
+        ? this.searchCollapsedHistory(history, request.query, request.limit)
+        : this.loadCollapsedHistory(history, request.indexes);
     }
 
     const wireName = request.wireName?.trim();

@@ -19,6 +19,7 @@ import {
   SELECTED_SKILL_LOAD_WIRE_NAME,
   type SelectedSkillPacket,
 } from "../src/adapters/chatgpt-web/selected-skill";
+import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "../src/adapters/chatgpt-web/history-recall";
 import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnSessions, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey } from "../src/adapters/chatgpt-web/turn-execution";
 import { callTurnBroker, TurnBroker, type BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
 import { hashChatGptLunaAnswer } from "../src/adapters/chatgpt-web/rolling-checkpoint";
@@ -2093,6 +2094,56 @@ describe("ChatGPT outer-native harness v4", () => {
       expect(request).toMatchObject({ wireName: "exec_command" });
       broker.completeTool(token, request!.callId, toolResult({ output: tempRoot, exit_code: 0 }));
       await expect(exec).resolves.toMatchObject({ structuredContent: { output: tempRoot, exit_code: 0 } });
+    } finally {
+      await client.close().catch(() => {});
+      broker.revoke(token);
+      await broker.close();
+    }
+  }, 30_000);
+
+  test("serves collapsed history recall over MCP stdio without a public schema change", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-h4-mcp-history-${process.pid}-${Date.now()}`);
+    const broker = TurnBroker.forSocket(socketPath);
+    const recallEnvironment = extractChatGptTurnEnvironment(parsed(environmentXml));
+    recallEnvironment.tools = [
+      { name: "exec_command", description: "Run a command", parameters: { type: "object" } },
+    ];
+    const token = await broker.register(recallEnvironment, 60_000, "history-recall");
+    broker.attachCollapsedHistory(token, [
+      { index: 0, role: "user", text: "the release tag is RECALL-MARKER-42" },
+      { index: 1, role: "toolResult", text: "build log without the tag" },
+    ]);
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ["src/cli.ts", "mcp", "--broker-socket", socketPath],
+      cwd: process.cwd(),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "codex-chatgpt-web-history-test", version: "1.0.0" });
+    const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args });
+
+    try {
+      await client.connect(transport);
+      // The recall tools are not advertised in the public inventory — discovery is the marker only.
+      const inventory = await call("codex_tool_inventory", { turn_token: token });
+      expect(JSON.stringify(inventory.structuredContent)).not.toContain(HISTORY_SEARCH_WIRE_NAME);
+
+      const search = await call("codex_tool_call", {
+        turn_token: token,
+        wire_name: HISTORY_SEARCH_WIRE_NAME,
+        arguments: { query: "recall-marker" },
+      });
+      expect(search.structuredContent).toMatchObject({ matches: [{ index: 0 }] });
+
+      const loaded = await call("codex_tool_call", {
+        turn_token: token,
+        wire_name: HISTORY_LOAD_WIRE_NAME,
+        arguments: { indexes: [0] },
+      });
+      expect(loaded.structuredContent).toMatchObject({
+        messages: [{ index: 0, role: "user", text: "the release tag is RECALL-MARKER-42" }],
+        truncated: false,
+      });
     } finally {
       await client.close().catch(() => {});
       broker.revoke(token);

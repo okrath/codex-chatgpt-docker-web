@@ -298,6 +298,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
      * otherwise have overflowed; routine strips are logged to the daemon
      * console instead. Applies to both read-only and tool-capable turns.
      */
+    let lastBudgetedCompilation: ReturnType<typeof compileLunaBudgetedPrompt> | undefined;
     const compilePromptWithLunaBudget = (turnToken?: string): CompiledChatGptWebPrompt => {
       const result = compileLunaBudgetedPrompt(
         promptInput,
@@ -305,6 +306,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         turnToken,
         promptOptions,
       );
+      lastBudgetedCompilation = result;
       if (result.slimmed) {
         const summary = describeLunaSlimming(result, CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
         console.info(`[chatgpt-web] ${summary}`);
@@ -374,6 +376,10 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         token.resolve(turnToken);
         try {
           const compiled = compilePromptWithLunaBudget(turnToken);
+          // Fail-open recall: keep the messages Luna slimming collapsed available verbatim through
+          // the broker's reserved history wire names. A turn that never calls them is unaffected.
+          const removedHistory = lastBudgetedCompilation?.removedHistory ?? [];
+          if (removedHistory.length > 0) broker.attachCollapsedHistory(turnToken, removedHistory);
           return { ...compiled, release: () => {} };
         } catch (error) {
           broker.revoke(turnToken);

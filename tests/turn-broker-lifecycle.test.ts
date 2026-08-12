@@ -311,6 +311,105 @@ test("a turn without a selected skill still completes after the browser abandons
   }
 });
 
+test("collapsed history is searchable and loadable verbatim, and wiped on revoke", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-history-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [{ name: "exec_command", description: "run", parameters: { type: "object" } }],
+    }, 60_000, "turn-history");
+    broker.attachCollapsedHistory(token, [
+      { index: 0, role: "user", text: "the deploy target is UNIQUE-MARKER-A in prod" },
+      { index: 1, role: "toolResult", text: "ran build, output UNIQUE-MARKER-B" },
+    ]);
+    expect(() => broker.attachCollapsedHistory(token, [{ index: 0, role: "user", text: "x" }]))
+      .toThrow("already attached");
+
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
+    const search = await callTurnBroker<{ matches: Array<{ index: number; snippet: string }> }>(socketPath, {
+      method: "search_history",
+      bindingId: claimed.bindingId,
+      query: "unique-marker-b",
+    });
+    expect(search.matches).toHaveLength(1);
+    expect(search.matches[0]).toMatchObject({ index: 1 });
+    expect(search.matches[0]!.snippet).toContain("UNIQUE-MARKER-B");
+
+    const loaded = await callTurnBroker<{ messages: Array<{ index: number; text: string }>; truncated: boolean }>(socketPath, {
+      method: "load_history",
+      bindingId: claimed.bindingId,
+      indexes: [0, 1],
+    });
+    expect(loaded.truncated).toBe(false);
+    expect(loaded.messages.map(m => m.text)).toEqual([
+      "the deploy target is UNIQUE-MARKER-A in prod",
+      "ran build, output UNIQUE-MARKER-B",
+    ]);
+
+    await expect(callTurnBroker(socketPath, {
+      method: "load_history",
+      bindingId: claimed.bindingId,
+      indexes: [9],
+    })).rejects.toThrow("out of range");
+
+    broker.revoke(token);
+    await expect(callTurnBroker(socketPath, { method: "claim", token })).rejects.toThrow(/finished|invalid/);
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("history recall stays locked until a selected skill is acknowledged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-history-skill-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  const skill: SelectedSkillPacket = {
+    name: "ck:ask",
+    content: "# ck:ask\nFollow this procedure.\n",
+    sourceText: "<skill name=\"ck:ask\"># ck:ask\nFollow this procedure.\n</skill>",
+    sourceMessageIndex: 0,
+    chars: 32,
+    bytes: 32,
+    sha256: "f".repeat(64),
+  };
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [{ name: "exec_command", description: "run", parameters: { type: "object" } }],
+    }, 60_000, "turn-history-skill", skill);
+    broker.attachCollapsedHistory(token, [{ index: 0, role: "user", text: "older detail worth recalling" }]);
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
+
+    await expect(callTurnBroker(socketPath, {
+      method: "search_history",
+      bindingId: claimed.bindingId,
+      query: "older",
+    })).rejects.toThrow("must be loaded and acknowledged");
+
+    await callTurnBroker(socketPath, { method: "load_skill", bindingId: claimed.bindingId });
+    await callTurnBroker(socketPath, { method: "ack_skill", bindingId: claimed.bindingId, sha256: skill.sha256 });
+
+    const search = await callTurnBroker<{ matches: unknown[] }>(socketPath, {
+      method: "search_history",
+      bindingId: claimed.bindingId,
+      query: "older",
+    });
+    expect(search.matches).toHaveLength(1);
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function unansweredBrokerEndpoint(name: string, onConnection: (socket: Socket) => void) {
   const root = mkdtempSync(join(tmpdir(), name));
   const socketPath = defaultBrokerEndpoint(root);

@@ -9,6 +9,7 @@ import {
   SELECTED_SKILL_LOAD_WIRE_NAME,
   type LoadedSelectedSkill,
 } from "./selected-skill";
+import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "./history-recall";
 import {
   callTurnBroker,
   type BrokerSelectedSkillSummary,
@@ -435,6 +436,30 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
         return result(acknowledged);
       }
       requireSelectedSkillAcknowledged(claimed);
+      if (wire_name === HISTORY_SEARCH_WIRE_NAME) {
+        if (input !== undefined) throw new Error(`${HISTORY_SEARCH_WIRE_NAME} does not accept freeform input`);
+        const query = args?.query;
+        const limit = args?.limit;
+        if (typeof query !== "string") throw new Error(`${HISTORY_SEARCH_WIRE_NAME} requires a string query argument`);
+        const found = await callTurnBroker<{ matches: unknown[] }>(options.brokerSocketPath, {
+          method: "search_history",
+          bindingId: claimed.bindingId,
+          query,
+          ...(limit === undefined ? {} : { limit: typeof limit === "number" ? limit : Number.NaN }),
+        }, invocationTimeout(claimed.environment));
+        return result({ ...found });
+      }
+      if (wire_name === HISTORY_LOAD_WIRE_NAME) {
+        if (input !== undefined) throw new Error(`${HISTORY_LOAD_WIRE_NAME} does not accept freeform input`);
+        const indexes = args?.indexes;
+        if (!Array.isArray(indexes)) throw new Error(`${HISTORY_LOAD_WIRE_NAME} requires an indexes array argument`);
+        const loaded = await callTurnBroker<{ messages: unknown[]; truncated: boolean }>(options.brokerSocketPath, {
+          method: "load_history",
+          bindingId: claimed.bindingId,
+          indexes,
+        }, invocationTimeout(claimed.environment));
+        return result({ ...loaded });
+      }
       const bound = claimed.environment;
       const tool = namedTool(bound, wire_name);
       if (tool.freeform) {
