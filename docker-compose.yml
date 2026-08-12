@@ -24,6 +24,10 @@ services:
       # Set REPLACE_CODEX_ROUTE=1 for the first boot when ~/.codex/config.toml
       # already contains a custom or previously installed openai_base_url.
       REPLACE_CODEX_ROUTE: "${REPLACE_CODEX_ROUTE:-0}"
+      # Experimental (off by default): deliver an over-budget Luna turn as ordered
+      # preload messages instead of collapsing history. Enable for a run with
+      # `CODEX_CHATGPT_WEB_LUNA_PRELOAD=on docker compose up -d`.
+      CODEX_CHATGPT_WEB_LUNA_PRELOAD: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD:-off}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:17841/healthz"]
       interval: 30s
