@@ -41,11 +41,22 @@ the failed fail-closed loader designs. Three independent improvements:
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 | [Fail-open history tools](./phase-01-fail-open-history-tools.md) | implemented; static green, live smoke pending |
-| 2 | [Budgeted collapse index](./phase-02-collapse-index.md) | implemented; static green, live smoke pending |
-| 3 | [Structured rolling checkpoint](./phase-03-structured-checkpoint.md) | implemented; static green, live smoke pending |
-| 4 | [Validation, live smoke, docs](./phase-04-validation-and-docs.md) | planned |
-| 5 | [Recall the history the checkpoint replaced](./phase-05-checkpoint-replaced-history-recall.md) | implemented; static green, live smoke pending |
+| 1 | [Fail-open history tools](./phase-01-fail-open-history-tools.md) | done; recall plumbing live-verified via phase 5 |
+| 2 | [Budgeted collapse index](./phase-02-collapse-index.md) | done (static only); collapse stays dormant under checkpoint, so no live trigger |
+| 3 | [Structured rolling checkpoint](./phase-03-structured-checkpoint.md) | done; checkpoint apply chain live-verified |
+| 4 | [Validation, live smoke, docs](./phase-04-validation-and-docs.md) | done |
+| 5 | [Recall the history the checkpoint replaced](./phase-05-checkpoint-replaced-history-recall.md) | done; live-verified end-to-end |
+
+## Live smoke result (2026-08-12)
+
+Full-mode Luna, free account. A value (`DEPLOY-TAG=RECALL-7Q2-XK vùng ap-southeast-1`) planted in
+turn 1 was summarized away by the rolling checkpoint by turn 3 (`applied=true replacedHistory=8`).
+Asked for it exactly, the model called `__codex_search_collapsed_history_v1`
+(`broker … history search matches=2/8`) and reproduced the exact string — proving the model uses the
+optional recall path and the bridge serves verbatim content the summary had dropped. No overflow, no
+fail-closed, no regression across the run. Phase 2's collapse index could not be live-triggered
+because history collapse stays dormant while the checkpoint is healthy; it remains statically
+verified. README updated.
 
 Phases 1–3 are independent; each can ship or roll back alone. Phase 4 gates README changes.
 

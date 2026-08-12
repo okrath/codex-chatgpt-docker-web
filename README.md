@@ -142,12 +142,37 @@ A real ~1.12M-token thread compiles down to ~14k this way and runs normally. Whe
 rescues an over-budget turn, a `✂️` line appears in the Codex trace with the before/after
 numbers; routine drops are logged to `docker compose logs`.
 
-**The trade-off:** the Web model no longer sees the full text of the collapsed history — it
-works from the recent turns plus Luna's rolling checkpoint (a compact running summary the
-bridge maintains). So the thread stays alive and coherent for continuing work, but asking it
-to recall verbatim detail from far earlier in a collapsed thread is unreliable; for that,
-starting a fresh thread is cleaner. Tune or disable the rule-section dropping with
-`CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names, or `off`).
+**The trade-off:** the Web model no longer sees the full text of the collapsed history inline —
+it works from the recent turns plus Luna's rolling checkpoint (a compact running summary the
+bridge maintains). The thread stays alive and coherent for continuing work, and in **Full mode**
+that summary is no longer a dead end for exact detail (see the next section). Tune or disable the
+rule-section dropping with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names, or
+`off`).
+
+### Verbatim recall of compressed history (Full mode)
+
+The rolling checkpoint is a summary, so an exact earlier detail — a deploy tag, a path, a command
+output — can drop out of it. In **Full local-tools mode** the bridge keeps the raw history it
+compressed (both the span the checkpoint replaces and anything the collapse step removed) verbatim
+in **turn-scoped RAM**, and tells the Web model it can fetch it on demand:
+
+- The model works from the compact summary as before.
+- When it needs an exact detail the summary omitted, it calls `codex_tool_call` with
+  `__codex_search_collapsed_history_v1` to find the message, then
+  `__codex_load_collapsed_history_v1` to read it verbatim.
+- This is **fail-open and optional** — a turn that never needs it is unchanged. The recall store is
+  read-only, wiped when the turn ends, and adds no tools, workspace access, or permissions.
+
+Verified end-to-end on a free Luna account: a value planted in the first turn, then summarized away
+by the checkpoint several turns later, was reproduced exactly after the model called the recall
+tool (`history search matches=2/8` in `docker compose logs`). Because Luna publishes its real ~1M
+model window, Codex does not pre-compact the thread, so the history the bridge keeps is genuinely
+verbatim rather than an already-summarized copy. Browser-only and Pro read-only turns keep the
+inline behavior and have no recall store.
+
+The checkpoint itself is a structured, carry-forward record — it keeps Objective, Decisions, Files
+touched, Learned facts, and Open work across turns and updates them rather than rewriting each turn,
+so important detail ages out less often even before recall is needed.
 
 ## What this fork changes
 

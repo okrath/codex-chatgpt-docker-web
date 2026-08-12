@@ -1,6 +1,19 @@
 # Phase 04: validation, live smoke, docs
 
-Status: planned
+Status: done. Live smoke passed on free Luna; README updated.
+
+## Result
+
+- Static gate: 354 tests, 0 fail, typecheck clean in the throwaway `oven/bun:1.3.14` container.
+- Live smoke (Full mode, free Luna): planted value summarized away by the checkpoint, then
+  reproduced exactly after the model called `__codex_search_collapsed_history_v1`
+  (`broker … history search matches=2/8`, `applied=true replacedHistory=8`). Fail-open confirmed:
+  ordinary turns completed with zero recall calls and no errors.
+- Observability: broker logs `replacedHistory=N` per applied checkpoint and one line per recall.
+- README: added the "Verbatim recall of compressed history (Full mode)" section and noted the
+  structured carry-forward checkpoint.
+- Phase 2's collapse index remains static-only — history collapse does not fire while the rolling
+  checkpoint is healthy, so there is no live path to trigger the index; unit tests cover it.
 
 ## Context
 
