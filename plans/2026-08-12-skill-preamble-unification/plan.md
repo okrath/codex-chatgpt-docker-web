@@ -5,7 +5,7 @@ status: reverted
 priority: P2
 branch: main
 tags: [luna, preload, skill, transport]
-blockedBy: [2026-08-12-transport-layer-refactor]
+blockedBy: []
 created: 2026-08-12
 createdBy: claude
 ---

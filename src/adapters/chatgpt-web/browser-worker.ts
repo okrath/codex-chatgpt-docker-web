@@ -27,7 +27,8 @@ import {
   estimateCompiledChatGptWebMessageTokens,
 } from "./input-tokens";
 import { CHATGPT_MAX_INPUT_IMAGES, type CompiledChatGptWebPrompt, type ChatGptWebPromptImage } from "./prompt";
-import type { PreparedChatGptWebPrompt } from "./transport-contract";
+import { toChatGptWebTransportPlan, type PreparedChatGptWebPrompt } from "./transport-contract";
+import { deliverPreambleParts } from "./browser-transport";
 import { estimateCompiledChatGptWebInputTokens } from "./input-tokens";
 import {
   assertAuthenticatedChatGptPage,
@@ -269,23 +270,6 @@ export function chatGptPreloadResponseTimeoutMs(env: NodeJS.ProcessEnv = process
   const value = Number.parseInt(raw, 10);
   if (!Number.isFinite(value) || value < 5_000) return CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS;
   return Math.min(value, CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS);
-}
-
-/**
- * Wrap one preload context chunk with a fixed acknowledge-and-wait instruction. The bridge splits
- * an over-budget turn into ordered context parts plus a final task message; each part asks the
- * model only to store the context and reply "OK". The turn does not depend on that reply — any
- * completed response advances delivery — but the instruction keeps the intermediate answers short.
- */
-export function chatGptPreambleMessageText(chunk: string, index: number, total: number): string {
-  return [
-    `[Codex context preload — part ${index + 1} of ${total}]`,
-    "This is earlier task context, split only to fit the per-message size limit. Read and remember"
-    + " it, then reply with just OK. Do not act on it and do not answer anything yet — the complete"
-    + " current instruction arrives in the final part.",
-    "",
-    chunk,
-  ].join("\n");
 }
 
 export interface BrowserTurn {
@@ -1810,13 +1794,14 @@ export class ChatGptBrowserWorker {
       if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
       const estimatedInputTokens = estimateCompiledChatGptWebInputTokens(prepared, turn.modelId);
       const estimatedMessageTokens = estimateCompiledChatGptWebMessageTokens(prepared, turn.modelId);
+      const plan = toChatGptWebTransportPlan(prepared, estimatedInputTokens);
       assertChatGptWebInputWithinLimits(
         estimatedInputTokens,
         estimatedMessageTokens,
         turn.modelId,
         requestedMode.effort,
         turn.capabilities,
-        prepared.text.length,
+        plan.finalMessage.length,
       );
       const deadline = this.config.turnTimeoutMs === undefined
         ? undefined
@@ -1848,7 +1833,7 @@ export class ChatGptBrowserWorker {
       diagnosticPage = page;
       await diagnostics.capture(page, "browser-page-acquired");
       console.info(
-        `[chatgpt-web] browser turn ${turn.traceId} opened (transport=inline, promptChars=${prepared.text.length}, estimatedInputTokens=${estimatedInputTokens}, images=${prepared.images.length}, compactionTrimmedMessages=${prepared.trimmedCompactionMessages ?? 0})`,
+        `[chatgpt-web] browser turn ${turn.traceId} opened (transport=inline, promptChars=${plan.finalMessage.length}, estimatedInputTokens=${plan.estimatedInputTokens}, images=${plan.images.length}, compactionTrimmedMessages=${plan.trimmedCompactionMessages})`,
       );
       await this.runStage(
         turn.traceId,
@@ -1871,41 +1856,30 @@ export class ChatGptBrowserWorker {
       await diagnostics.capture(page, "effort-selection-complete");
       // Preload: when the turn was split to fit the transport budget, deliver each earlier-context
       // part as its own message in this same chat before the final task message. Empty on normal
-      // turns, so the single-message flow below is byte-identical.
-      const preamble = prepared.preamble ?? [];
-      try {
-        for (let index = 0; index < preamble.length; index += 1) {
-          await this.runStage(
-            turn.traceId,
-            "preamble_delivery",
-            chatGptPreloadResponseTimeoutMs() + browserStageTimeouts.send,
-            stageSignal => this.deliverPreambleChunk(
-              page,
-              chatGptPreambleMessageText(preamble[index]!, index, preamble.length),
-              index,
-              preamble.length,
-              mode,
-              turn,
-              diagnostics,
-              deadline,
-              stageSignal,
-            ),
-          );
-        }
-      } catch (error) {
-        // Cancellation is not a delivery failure. Anything else means preload could not be delivered
-        // (a throttled part timed out, the composer diverged, a dialog appeared). Classify it so the
-        // adapter retries this turn once without preload — as a single slimmed message — instead of
-        // failing a turn that would otherwise have fit.
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-        if (turn.abortSignal?.aborted) throw error;
-        throw new ChatGptWebAdapterError(
-          `ChatGPT preload delivery failed: ${error instanceof Error ? error.message : String(error)}`,
-          { status: 502, errorType: "server_error", code: "preload_delivery_failed", retryable: true },
-        );
-      }
+      // turns, so the single-message flow below is byte-identical. `deliverPreambleParts` owns the
+      // iteration + failure classification; the DOM step stays here as the callback.
+      await deliverPreambleParts(
+        plan.preamble,
+        (text, index, total) => this.runStage(
+          turn.traceId,
+          "preamble_delivery",
+          chatGptPreloadResponseTimeoutMs() + browserStageTimeouts.send,
+          stageSignal => this.deliverPreambleChunk(
+            page,
+            text,
+            index,
+            total,
+            mode,
+            turn,
+            diagnostics,
+            deadline,
+            stageSignal,
+          ),
+        ),
+        () => turn.abortSignal?.aborted ?? false,
+      );
       await this.runStage(turn.traceId, "prompt_attachment", browserStageTimeouts.promptAttachment, () => (
-        this.attachPrompt(page, prepared.text, mode.localTools, checkpoint => diagnostics.capture(page, checkpoint))
+        this.attachPrompt(page, plan.finalMessage, mode.localTools, checkpoint => diagnostics.capture(page, checkpoint))
       ));
       await diagnostics.capture(page, "prompt-attachment-complete");
       await this.runStage(turn.traceId, "file_attachment", browserStageTimeouts.fileAttachment, () => (

@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { Page } from "playwright-core";
-import { CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_PROMPT_INSERT_CHUNK_CHARS, ChatGptBrowserWorker, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_TABS, assertChatGptWebInputWithinLimits, browserDiagnosticCheckpoint, browserDiagnosticIncludesScreenshot, chatGptPreambleMessageText, chatGptSubmissionEvidence, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert } from "../src/adapters/chatgpt-web/browser-worker";
+import { CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_PROMPT_INSERT_CHUNK_CHARS, ChatGptBrowserWorker, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_TABS, assertChatGptWebInputWithinLimits, browserDiagnosticCheckpoint, browserDiagnosticIncludesScreenshot, chatGptSubmissionEvidence, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert } from "../src/adapters/chatgpt-web/browser-worker";
+import { chatGptPreambleMessageText, deliverPreambleParts } from "../src/adapters/chatgpt-web/browser-transport";
+import { ChatGptWebAdapterError } from "../src/adapters/chatgpt-web/adapter-error";
 import { CHATGPT_CONNECTOR_NAME, defaultChromeExecutable } from "../src/config";
 import { parseChatGptEffortSliderState } from "../src/chatgpt-session";
 
@@ -21,13 +23,44 @@ test("preload parts wrap context with an acknowledge-and-wait instruction and ke
   expect(chatGptPreambleMessageText("x", 2, 3)).toContain("part 3 of 3");
 });
 
-test("preload delivery is guarded so the single-message flow is unchanged when no preamble exists", () => {
-  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
-  // The preamble loop only runs when the prepared payload carries parts; the final attach/send is
-  // reached unconditionally after it.
-  expect(workerSource).toContain("const preamble = prepared.preamble ?? [];");
-  expect(workerSource).toContain("this.deliverPreambleChunk(");
-  expect(workerSource).toContain('this.runStage(turn.traceId, "prompt_attachment"');
+test("deliverPreambleParts does nothing for an empty preamble (single-message flow unchanged)", async () => {
+  let calls = 0;
+  await deliverPreambleParts([], () => { calls += 1; return Promise.resolve(); }, () => false);
+  expect(calls).toBe(0);
+});
+
+test("deliverPreambleParts delivers every part in order with wrapped acknowledge-and-wait text", async () => {
+  const seen: Array<{ text: string; index: number; total: number }> = [];
+  await deliverPreambleParts(["A", "B", "C"], (text, index, total) => {
+    seen.push({ text, index, total });
+    return Promise.resolve();
+  }, () => false);
+  expect(seen.map(s => s.index)).toEqual([0, 1, 2]);
+  expect(seen.every(s => s.total === 3)).toBe(true);
+  expect(seen[0]!.text).toContain("part 1 of 3");
+  expect(seen[0]!.text).toContain("A");
+  expect(seen[2]!.text).toContain("part 3 of 3");
+});
+
+test("deliverPreambleParts propagates an abort unchanged, without classifying it as a delivery failure", async () => {
+  const abort = new DOMException("aborted", "AbortError");
+  await expect(deliverPreambleParts(["A"], () => Promise.reject(abort), () => false)).rejects.toThrow("aborted");
+  // A turn-level abort (isAborted true) also passes the original error through.
+  const boom = new Error("cancelled mid-part");
+  await expect(deliverPreambleParts(["A"], () => Promise.reject(boom), () => true)).rejects.toThrow("cancelled mid-part");
+});
+
+test("deliverPreambleParts classifies a real mid-delivery failure as retryable preload_delivery_failed", async () => {
+  try {
+    await deliverPreambleParts(["A"], () => Promise.reject(new Error("composer diverged")), () => false);
+    throw new Error("expected a classified delivery failure");
+  } catch (error) {
+    expect(error).toBeInstanceOf(ChatGptWebAdapterError);
+    const adapterError = error as ChatGptWebAdapterError;
+    expect(adapterError.code).toBe("preload_delivery_failed");
+    expect(adapterError.retryable).toBe(true);
+    expect(adapterError.message).toContain("composer diverged");
+  }
 });
 
 test("completed prompts activate the scoped semantic send control", () => {

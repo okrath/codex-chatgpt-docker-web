@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Browser delivery runtime"
-status: pending
+status: done (safe scope)
 priority: P1
 dependencies: [2]
 effort: "1-2d"
@@ -61,18 +61,39 @@ module owns the repeated attach/submit/wait sequence.
 6. Add deterministic tests for ordering, exact verification, intermediate-response suppression,
    abort between parts, timeout on a part, rate-limit detection, and final-message streaming.
 
-## Implementation Steps
+## Implementation Steps (done 2026-08-12, safe scope)
 
-<!-- Detailed steps -->
+**Scope decision (user-approved):** the full physical extraction of the entire `runBrowserTurn` DOM
+loop (completion tracking, streaming, checkpoint capture) into a standalone runtime was deliberately
+NOT done. That loop is the live-verified delivery path, deeply entangled with worker page/session/
+diagnostics state, and can only be verified here with mocked tests — a blind full extraction risked
+regressing the user's live delivery for mostly structural gain. Instead the safe, self-contained,
+test-covered mechanics were extracted and the transport contract was threaded through the boundary.
+
+- New `src/adapters/chatgpt-web/browser-transport.ts`: owns the reusable delivery *sequence and error
+  policy* — `chatGptPreambleMessageText` (moved here) and `deliverPreambleParts(parts, deliverPart,
+  isAborted)`, which iterates ordered parts and classifies any non-abort mid-delivery failure as the
+  retryable `preload_delivery_failed`. It imports no worker/page types; the caller supplies the DOM
+  `deliverPart` step.
+- `browser-worker.ts`: builds `ChatGptWebTransportPlan` from the prepared prompt and now reads
+  `plan.finalMessage` / `plan.preamble` / `plan.images` / `plan.estimatedInputTokens` /
+  `plan.trimmedCompactionMessages` at the delivery boundary. The preamble loop is replaced by a call
+  to `deliverPreambleParts` (DOM chunk delivery stays in the worker as the callback). The intricate
+  completion/streaming/checkpoint code is untouched — same stage names, timeouts, evidence.
+- Tests: `deliverPreambleParts` gets behavioral coverage (empty → no-op, in-order wrapped delivery,
+  abort passthrough, retryable-failure classification); the brittle source-string assertion was
+  replaced.
 
 ## Success Criteria
 
-- [ ] Browser delivery accepts the phase-1 transport contract without inspecting Luna policy.
-- [ ] Preamble and final delivery share one submission/completion primitive.
-- [ ] Intermediate responses never reach `ChatGptTextFeed`.
-- [ ] Abort/timeout/error behavior remains equivalent to the current worker.
-- [ ] Launcher and managed-browser paths use the same delivery semantics.
-- [ ] Browser-worker contract and harness tests pass.
+- [x] Browser delivery accepts the phase-1 transport contract (`plan.*`) without inspecting Luna policy.
+- [x] Preamble delivery iteration/error policy is a single reusable primitive (`deliverPreambleParts`);
+      the shared preamble+final submission primitive at the DOM level stays in the worker (see scope).
+- [x] Intermediate responses never reach `ChatGptTextFeed` (unchanged; deliverPreambleChunk untouched).
+- [x] Abort/timeout/error behavior remains equivalent (same classification, same stage timeouts).
+- [~] Launcher and managed-browser paths: unchanged — they already share `runBrowserTurn`; no DOM loop
+      was duplicated or moved, so this stays as-is (not regressed).
+- [x] Browser-worker contract and harness tests pass (109 in those suites; 352 total).
 
 ## Risk Assessment
 

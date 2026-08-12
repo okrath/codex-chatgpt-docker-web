@@ -1,8 +1,7 @@
 ---
 phase: 4
 title: "Integration verification and migration"
-status: pending
-priority: P1
+status: done
 dependencies: [3]
 effort: "1-2d"
 ---
@@ -57,20 +56,44 @@ The final ownership model is:
 8. Only after green verification, remove the new-plan dependency block from A4 and resume A4 follow-up
    work if still needed.
 
-## Implementation Steps
+## Implementation Steps (done 2026-08-12)
 
-<!-- Detailed steps -->
+- Migrated symbols accounted for: `chatGptPreambleMessageText` moved `browser-worker.ts` →
+  `browser-transport.ts`; its only external consumer was `tests/browser-worker-contract.test.ts`,
+  updated to the new import. `PreparedChatGptWebPrompt` + `ChatGptWebTransportPlan` +
+  `toChatGptWebTransportPlan` + `deliverPreambleParts` are the new symbols; consumers are
+  `browser-worker.ts` and the transport/contract tests only.
+- Compatibility adapters retained by design: `CompiledChatGptWebPrompt` stays as the compiled-prompt
+  type (owned by `prompt.ts`, produced by `luna-context-slimming.ts`); the transport plan is a
+  derived delivery view built at the browser boundary. No duplicate transport implementation exists —
+  the preamble iteration/error policy lives once in `deliverPreambleParts`.
+- Final ownership vs. the phase-4 table: `index.ts` = canonical setup/orchestration; `prompt.ts` =
+  semantic contract; `luna-context-slimming.ts` = Luna strategy; `transport-contract.ts` = transport
+  plan; `browser-transport.ts` = reusable delivery mechanics; `browser-worker.ts` = DOM lifecycle +
+  the (intentionally unmoved) completion/streaming loop; `turn-execution.ts`/`turn-broker.ts`
+  unchanged. The "selected-skill" ownership row is void — that subsystem was reverted (`edf29f5`).
+- A4 dependency: A4 is reverted; its `blockedBy` link to this plan was cleared and this plan's
+  `blocks` list is empty.
+- Whole-plan sweep: phase files updated to reflect the safe scope + skill-removal impact; no
+  unresolved contradictions remain (skill requirements explicitly marked N/A).
+
+## Verification
+
+- `bunx tsc --noEmit`: clean.
+- Full suite `bun test tests/*.test.ts`: 352 pass, 0 fail.
+- **Live preload smoke: BLOCKED** — no live Luna turn was run against this build; the DOM completion/
+  streaming loop was intentionally not moved, so the mocked contract/harness suites are the evidence,
+  not a live PASS. Rebuild + a real over-budget Luna turn is the outstanding live gate.
 
 ## Success Criteria
 
-- [ ] Repository-wide callers of migrated symbols are accounted for.
-- [ ] No duplicate transport implementations remain.
-- [ ] Focused suites pass.
-- [ ] Full test suite passes.
-- [ ] `bunx tsc --noEmit` passes.
-- [ ] Existing live preload smoke remains valid; if live evidence is unavailable, report it as
-      BLOCKED rather than treating static tests as a live PASS.
-- [ ] Whole-plan consistency sweep reports zero unresolved contradictions.
+- [x] Repository-wide callers of migrated symbols are accounted for.
+- [x] No duplicate transport implementations remain.
+- [x] Focused suites pass.
+- [x] Full test suite passes (352 / 0).
+- [x] `bunx tsc --noEmit` passes.
+- [BLOCKED] Live preload smoke — not run against this build; reported as BLOCKED, not a static PASS.
+- [x] Whole-plan consistency sweep reports zero unresolved contradictions.
 
 ## Risk Assessment
 

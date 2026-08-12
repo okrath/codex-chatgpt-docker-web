@@ -32,7 +32,11 @@ export interface ChatGptWebTransportPlan {
   readonly preamble: readonly string[];
   /** Attachments to send with the final message. */
   readonly images: readonly ChatGptWebPromptImage[];
-  /** Estimated input tokens for the whole delivered turn, summed across every delivered message. */
+  /**
+   * Estimated input tokens for the final delivered message, as supplied by the caller. This is the
+   * number the browser transport preflight checks against the per-message budget; the summed-across-
+   * parts total is a separate usage-accounting concern owned by the budget pipeline, not this plan.
+   */
   readonly estimatedInputTokens: number;
   /** Oldest history items removed by native-style compaction fit recovery; 0 on normal turns. */
   readonly trimmedCompactionMessages: number;
@@ -41,11 +45,12 @@ export interface ChatGptWebTransportPlan {
 }
 
 /**
- * Map the current compiler result (plus its externally computed input-token estimate) into the
- * transport plan. Byte-for-byte equivalent to the fields the browser worker reads today: an absent
- * `preamble` becomes an empty list (single-message turn) and an absent `trimmedCompactionMessages`
- * becomes 0. The token estimate is supplied by the caller because it is derived from the compiled
- * prompt (`estimateCompiledChatGptWebInputTokens`) rather than owned by the compiler.
+ * Map the current compiler result (plus its externally computed final-message input-token estimate)
+ * into the transport plan. Byte-for-byte equivalent to the fields the browser worker reads today: an
+ * absent `preamble` becomes an empty list (single-message turn) and an absent
+ * `trimmedCompactionMessages` becomes 0. The token estimate is supplied by the caller because it is
+ * derived from the compiled prompt (`estimateCompiledChatGptWebInputTokens`) rather than owned by the
+ * compiler.
  */
 export function toChatGptWebTransportPlan(
   prepared: PreparedChatGptWebPrompt,

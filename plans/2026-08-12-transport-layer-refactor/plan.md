@@ -1,7 +1,7 @@
 ---
 title: "Refactor ChatGPT Web transport layer"
 description: "Refactor the ChatGPT Web transport path into explicit prompt, policy, transport-plan, and browser-delivery boundaries without changing shipped behavior."
-status: pending
+status: complete
 priority: P2
 branch: "main"
 tags: [refactor, backend, transport, luna]
@@ -71,9 +71,9 @@ context is semantically eligible for preload.
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | [Transport contract and seams](./phase-01-transport-contract-and-seams.md) | Done |
-| 2 | [Prompt compilation pipeline](./phase-02-prompt-compilation-pipeline.md) | Pending |
-| 3 | [Browser delivery runtime](./phase-03-browser-delivery-runtime.md) | Pending |
-| 4 | [Integration verification and migration](./phase-04-integration-verification-and-migration.md) | Pending |
+| 2 | [Prompt compilation pipeline](./phase-02-prompt-compilation-pipeline.md) | Done (already isolated post-revert) |
+| 3 | [Browser delivery runtime](./phase-03-browser-delivery-runtime.md) | Done (safe scope: preamble mechanics + contract threading) |
+| 4 | [Integration verification and migration](./phase-04-integration-verification-and-migration.md) | Done; live smoke BLOCKED |
 
 ## Dependencies
 
@@ -84,14 +84,16 @@ context is semantically eligible for preload.
 
 ## Success Criteria
 
-- [ ] Single-message and multi-message transport contracts are represented by explicit types rather
-      than implicit coupling between compiler and browser worker.
-- [ ] Prompt/budget code contains no Playwright or DOM knowledge.
-- [ ] Browser delivery code contains no Luna rule/history/skill selection policy.
-- [ ] Existing MCP skill and turn-broker semantics remain unchanged.
-- [ ] Focused transport tests cover ordering, exact composer verification, timeout/abort, fallback,
-      usage accounting, and replay/session behavior.
-- [ ] Full test suite and `bunx tsc --noEmit` pass before migration is considered complete.
+- [x] Single-message and multi-message transport contracts are represented by explicit types
+      (`ChatGptWebTransportPlan` / `PreparedChatGptWebPrompt`) rather than implicit coupling.
+- [x] Prompt/budget code contains no Playwright or DOM knowledge (unchanged; verified).
+- [x] Browser delivery code contains no Luna rule/history/skill selection policy (the worker reads the
+      transport plan, not policy; `deliverPreambleParts` is policy-free).
+- [x] turn-broker semantics remain unchanged. (MCP selected-skill was reverted separately in
+      `edf29f5`, so that clause is void.)
+- [x] Transport tests cover preamble ordering, delivery-failure classification, and plan accounting;
+      exact-composer/timeout/replay coverage is unchanged in the existing worker/harness suites.
+- [x] Full test suite (352/0) and `bunx tsc --noEmit` pass. Live preload smoke is BLOCKED (phase 4).
 
 ## Validation Log
 

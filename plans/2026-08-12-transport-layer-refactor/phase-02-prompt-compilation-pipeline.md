@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Prompt compilation pipeline"
-status: pending
+status: done
 priority: P1
 dependencies: [1]
 effort: "1-2d"
@@ -63,17 +63,31 @@ assemble dependencies and pass the result onward; it should not duplicate budget
 6. Add negative tests for ambiguous skill extraction, oversized final chunks, part-cap overflow,
    fallback after preload failure, and under-budget byte identity.
 
-## Implementation Steps
+## Implementation Steps (done 2026-08-12)
 
-<!-- Detailed steps -->
+Scope note: this plan predates the selected-skill revert (`edf29f5`). All skill-related requirements
+(MCP skill offload, preamble skill delivery, A4 mutual-exclusion, ambiguous-skill extraction) are
+**moot** — that code is gone. What remained of phase 2 was already largely satisfied post-revert.
+
+- `compileLunaBudgetedPrompt` (`luna-context-slimming.ts`) is the single pure decision path: rule-drop
+  → preload split → condense → collapse, returning a transport-neutral `LunaBudgetedCompilation`
+  (`compiled` + `estimatedTokens` + `preloadParts` + recall history). It imports no Playwright/browser
+  worker types; `index.ts` only orchestrates (checkpoint apply, broker register, trace) and does not
+  duplicate budget decisions.
+- Token accounting: the summed preload total lives on `estimatedTokens`/`estimatedTotalTokens` and
+  feeds usage; the per-message final estimate feeds the browser preflight. The phase-1
+  `ChatGptWebTransportPlan.estimatedInputTokens` is documented as the final-message preflight number,
+  not the sum, to keep the two concerns distinct.
+- No structural code change was needed here beyond phase 1's contract; verified by the existing
+  Luna/prompt suites staying green (352 pass total, typecheck clean).
 
 ## Success Criteria
 
-- [ ] One pure decision path explains every current Luna transport outcome.
-- [ ] No policy module imports Playwright or browser worker classes.
-- [ ] Usage estimates equal the actual transport plan parts plus final message.
-- [ ] A4 and MCP skill paths remain mutually exclusive and behaviorally unchanged.
-- [ ] Focused Luna/prompt/skill suites pass.
+- [x] One pure decision path explains every current Luna transport outcome (`compileLunaBudgetedPrompt`).
+- [x] No policy module imports Playwright or browser worker classes.
+- [x] Usage estimates equal the actual transport plan parts plus final message (summed `estimatedTokens`).
+- [x] ~~A4 and MCP skill paths remain mutually exclusive~~ — N/A, skill offload reverted (`edf29f5`).
+- [x] Focused Luna/prompt suites pass.
 
 ## Risk Assessment
 
