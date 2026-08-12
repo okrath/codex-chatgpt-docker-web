@@ -61,6 +61,10 @@ from this project's side. What it means in practice:
   freshly-read file must all fit within ~28k even after slimming. Full mode's tool contract
   makes each turn heavier, so headroom for your own content is smaller than in browser-only
   mode.
+- An explicitly selected existing skill can be moved out of that one browser message, but
+  the system prompt, history, current task, tool contract, and newly read files still count
+  toward the limit. For example, `$ck:ask abc xyz` may offload the selected skill body,
+  while the human task `abc xyz` stays inline.
 - If a turn still overflows after slimming, reduce it (trim `~/.codex/AGENTS.md`, start a
   fresh/short thread, work on fewer or smaller files at a time) or use a paid ChatGPT tier,
   whose web transport budget is substantially larger and unlocks
@@ -172,9 +176,14 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   (only in the copy sent to the browser — files on disk and native-model Codex usage are
   never touched). Full mechanism and trade-offs:
   [How Luna context slimming keeps long threads alive](#how-luna-context-slimming-keeps-long-threads-alive).
+- **Selected skill loader in Full mode.** When the outer Codex turn is `danger-full-access`,
+  an explicitly invoked existing skill can be moved out of the cloned browser message and
+  into turn-scoped broker RAM. The browser gets only a compact name/size/SHA-256
+  reference; it does not gain tools, workspace roots, sandbox scope, approval policy, or
+  connector permissions.
 
-Everything else — selectors, streaming, compaction, model catalog, security checks — is
-unchanged upstream code.
+Most other upstream bridge behavior — selectors, streaming, compaction, model catalog, and
+security checks — remains unchanged unless noted above.
 
 ## Requirements
 
@@ -359,6 +368,42 @@ tunnel takes ~15–30 seconds to come up after a container restart, so an immedi
 may briefly report "Tunnel runtime is not ready" — run it again. A healthy full-mode doctor
 ends with `✓ Tunnel runtime reports healthy and ready`; the remaining connector notice is
 informational (local checks cannot see ChatGPT settings).
+
+### Selected skill loader in Full mode
+
+Prerequisites:
+
+- Full local-tools mode
+- The outer Codex turn is `danger-full-access`
+- ChatGPT Developer Mode is on and the connector reads `Codex Native2 — Connected · Allow all`
+
+Flow:
+
+1. Codex injects an explicitly invoked existing skill as the final
+   `<skill name="...">...</skill>` item.
+2. The bridge removes that skill body from the cloned browser message, stores it in
+   turn-scoped broker RAM, and sends the browser only a compact name/size/SHA-256 reference.
+3. The browser uses the existing `codex_tool_call` path to load the exact UTF-8 bytes and
+   must acknowledge the same hash before native actions unlock or completion is accepted.
+4. Before that ack, native inventory and actions stay locked. A malformed or untrusted
+   envelope retains the normal inline behavior; multiple selected skills or a packet above
+   the 5,000,000-byte broker limit fail the turn explicitly.
+
+Example:
+
+- `$ck:ask abc xyz` selects the existing `ck:ask` skill. The browser may receive that skill
+  offloaded, while the human task text `abc xyz` stays inline.
+
+Boundaries:
+
+- Browser-only mode keeps the existing inline behavior.
+- Pro read-only mode keeps the existing inline behavior.
+- Skill loading is instructions-only; it does not expand tools, workspace roots, sandboxing, approval policy, or connector permissions.
+- State disappears on revoke.
+- If ChatGPT answers without completing the load/acknowledge handshake, the bridge fails that
+  turn explicitly (the unverified answer is withheld) and reports a retryable error naming the
+  skill. Retrying starts a fresh browser turn; running the task without the skill invocation
+  falls back to plain inline behavior.
 
 > **Free accounts work.** Developer mode and custom Tunnel connectors are available on the
 > free ChatGPT tier (verified: a free account created and connected `Codex Native2` with

@@ -54,6 +54,37 @@ test("tool-capable prompts pass one stable turn token directly to native actions
   expect(compiled.text).not.toContain("internally compacts this response");
 });
 
+test("tool-capable prompts keep the user task inline and replace a selected skill with a load-and-ack reference", () => {
+  const token = "turn_12345678901234567890123456789012";
+  const selected = request("high");
+  selected.context.messages.push({
+    role: "user",
+    content: "<skill name=\"ck:ask\">SECRET-SKILL-BODY</skill>",
+    timestamp: 3,
+  });
+  selected.context.messages.pop(); // Full-mode adapter strips the selected skill on a clone before compilation.
+  const compiled = compileChatGptWebPrompt(
+    selected,
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    token,
+    {
+      selectedSkill: {
+        name: "ck:ask",
+        sha256: "a".repeat(64),
+        chars: 17,
+        bytes: 17,
+      },
+    },
+  );
+
+  expect(compiled.text).toContain("perform the task");
+  expect(compiled.text).not.toContain("SECRET-SKILL-BODY");
+  expect(compiled.text).toContain("ck:ask");
+  expect(compiled.text).toContain("__codex_load_selected_skill_v1");
+  expect(compiled.text).toContain("__codex_ack_selected_skill_v1");
+  expect(compiled.text).toContain("a".repeat(64));
+});
+
 test("read-only prompts resume without exposing a bind capability", () => {
   const compiled = compileChatGptWebPrompt(
     request("max"),

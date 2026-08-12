@@ -5,7 +5,13 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { callTurnBroker, TurnBroker } from "../src/adapters/chatgpt-web/turn-broker";
+import type { SelectedSkillPacket } from "../src/adapters/chatgpt-web/selected-skill";
 import { defaultBrokerEndpoint, isWindowsPipeEndpoint } from "../src/config";
+
+const testInputAccounting = {
+  inputTokensFor: () => 0,
+  holdBrowserTextUntilFinalized: false,
+};
 
 test("explicit browser-turn cancellation aborts and removes every registered session", async () => {
   const sessions = new ChatGptTurnSessions();
@@ -15,6 +21,7 @@ test("explicit browser-turn cancellation aborts and removes every registered ses
     browser: Promise.resolve("done"),
     trace: new ChatGptTraceFeed(),
     text: new ChatGptTextFeed(),
+    ...testInputAccounting,
     cancel: () => { cancelled += 1; },
   }));
   await replayable.browserOutcome;
@@ -23,6 +30,7 @@ test("explicit browser-turn cancellation aborts and removes every registered ses
     browser: new Promise<string>(() => {}),
     trace: new ChatGptTraceFeed(),
     text: new ChatGptTextFeed(),
+    ...testInputAccounting,
     cancel: () => { cancelled += 1; },
   }));
 
@@ -40,6 +48,7 @@ test("session cache expiry never cancels a still-active long browser turn", asyn
     browser: new Promise<string>(() => {}),
     trace: new ChatGptTraceFeed(),
     text: new ChatGptTextFeed(),
+    ...testInputAccounting,
     cancel: () => { cancelled += 1; },
   }));
 
@@ -60,6 +69,7 @@ test("five active turns coexist and a sixth fails closed", () => {
     browser: new Promise<string>(() => {}),
     trace: new ChatGptTraceFeed(),
     text: new ChatGptTextFeed(),
+    ...testInputAccounting,
     cancel: () => { cancelled += 1; },
   });
 
@@ -88,6 +98,7 @@ test("settled replay sessions expire from their last use instead of their creati
       browser: Promise.resolve("done"),
       trace: new ChatGptTraceFeed(),
       text: new ChatGptTextFeed(),
+      ...testInputAccounting,
       cancel: () => {},
     };
   };
@@ -140,6 +151,160 @@ test("turn broker tokens do not expire while their browser turn is still alive",
     await Bun.sleep(5);
     await expect(callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token }))
       .resolves.toMatchObject({ bindingId: expect.any(String) });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("selected skills require exact load and acknowledgement before any native action", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-skill-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  const skill: SelectedSkillPacket = {
+    name: "ck:ask",
+    content: "# ck:ask\nFollow this procedure.\n",
+    sourceText: "<skill name=\"ck:ask\"># ck:ask\nFollow this procedure.\n</skill>",
+    sourceMessageIndex: 0,
+    chars: 32,
+    bytes: 32,
+    sha256: "f".repeat(64),
+  };
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [{ name: "exec_command", description: "run", parameters: { type: "object" } }],
+    }, 60_000, "turn-skill", skill);
+    const claimed = await callTurnBroker<{
+      bindingId: string;
+      selectedSkill: { name: string; sha256: string; state: string };
+    }>(socketPath, { method: "claim", token });
+
+    expect(claimed.selectedSkill).toMatchObject({ name: "ck:ask", sha256: skill.sha256, state: "pending" });
+    await expect(callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { command: "pwd" },
+    })).rejects.toThrow("must be loaded and acknowledged");
+
+    const loaded = await callTurnBroker(socketPath, {
+      method: "load_skill",
+      bindingId: claimed.bindingId,
+    });
+    expect(loaded).toEqual({
+      kind: "user_selected_skill",
+      name: skill.name,
+      content: skill.content,
+      sha256: skill.sha256,
+      chars: skill.chars,
+      bytes: skill.bytes,
+    });
+    await expect(callTurnBroker(socketPath, {
+      method: "ack_skill",
+      bindingId: claimed.bindingId,
+      sha256: "0".repeat(64),
+    })).rejects.toThrow("hash does not match");
+    await expect(callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+    })).rejects.toThrow("must be loaded and acknowledged");
+
+    await expect(callTurnBroker(socketPath, {
+      method: "ack_skill",
+      bindingId: claimed.bindingId,
+      sha256: skill.sha256,
+    })).resolves.toMatchObject({ acknowledged: true, sha256: skill.sha256 });
+    const invoke = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { command: "pwd" },
+    });
+    const [request] = await broker.nextToolBatch(token);
+    broker.completeTool(token, request!.callId, { content: [{ type: "text", text: "ok" }] });
+    await expect(invoke).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a skill-gated completion waits for every delivered native invocation result", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-finalize-action-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  const skill: SelectedSkillPacket = {
+    name: "ck:ask",
+    content: "# ck:ask\nFollow this procedure.\n",
+    sourceText: "<skill name=\"ck:ask\"># ck:ask\nFollow this procedure.\n</skill>",
+    sourceMessageIndex: 0,
+    chars: 32,
+    bytes: 32,
+    sha256: "f".repeat(64),
+  };
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [{ name: "exec_command", description: "run", parameters: { type: "object" } }],
+    }, 60_000, "turn-finalize-action", skill);
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
+    await callTurnBroker(socketPath, { method: "load_skill", bindingId: claimed.bindingId });
+    await callTurnBroker(socketPath, {
+      method: "ack_skill",
+      bindingId: claimed.bindingId,
+      sha256: skill.sha256,
+    });
+    const invoke = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { command: "pwd" },
+    });
+    const [request] = await broker.nextToolBatch(token);
+
+    expect(() => broker.finalize(token)).toThrow("actions must finish");
+    broker.completeTool(token, request!.callId, { content: [{ type: "text", text: "ok" }] });
+    await expect(invoke).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+    expect(() => broker.finalize(token)).not.toThrow();
+    await expect(callTurnBroker(socketPath, { method: "claim", token })).rejects.toThrow("already finalized");
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a turn without a selected skill still completes after the browser abandons a native call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-finalize-abandoned-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  try {
+    const token = await broker.register({
+      cwd: root,
+      roots: [root],
+      writableRoots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+      tools: [{ name: "exec_command", description: "run", parameters: { type: "object" } }],
+    }, 60_000, "turn-finalize-abandoned");
+    const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
+    const invoke = callTurnBroker(socketPath, {
+      method: "invoke",
+      bindingId: claimed.bindingId,
+      wireName: "exec_command",
+      arguments: { command: "pwd" },
+    });
+    await broker.nextToolBatch(token);
+
+    expect(() => broker.finalize(token)).not.toThrow();
+    broker.revoke(token);
+    await expect(invoke).rejects.toThrow("revoked");
   } finally {
     await broker.close();
     rmSync(root, { recursive: true, force: true });

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { extractChatGptTurnEnvironment } from "../src/adapters/chatgpt-web/environment";
+import { extractChatGptTurnEnvironment, extractChatGptTurnUserRevision } from "../src/adapters/chatgpt-web/environment";
 import { ChatGptThreadEnvironmentStore } from "../src/adapters/chatgpt-web/thread-environment";
 import type { CodexParsedRequest, CodexTool } from "../src/types";
 
@@ -97,6 +97,37 @@ describe("trusted current Codex environment envelope", () => {
       sandboxPolicy: { type: "dangerFullAccess" },
       tools: [],
     });
+  });
+
+  test("accepts the v0.145 combined app and environment context text", () => {
+    const request = currentWire({ includeIds: false });
+    const body = request._rawBody as { input: Array<Record<string, unknown>> };
+    for (const item of body.input) {
+      item.internal_chat_message_metadata_passthrough = { turn_id: "turn_current" };
+    }
+    body.input[0]!.content = [{
+      type: "input_text",
+      text: `<recommended_plugins>none</recommended_plugins>\n<INSTRUCTIONS>project rules</INSTRUCTIONS>\n${environmentXml}`,
+    }];
+    body.input.push({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "<skill name=\"ck:ask\">Use this skill.</skill>" }],
+      internal_chat_message_metadata_passthrough: { turn_id: "turn_current" },
+    });
+
+    expect(extractChatGptTurnEnvironment(request)).toMatchObject({
+      cwd: root,
+      roots: [root],
+      sandboxPolicy: { type: "dangerFullAccess" },
+    });
+  });
+
+  test("rejects multiple embedded environment envelopes", () => {
+    const request = currentWire();
+    const body = request._rawBody as { input: Array<Record<string, unknown>> };
+    body.input[0]!.content = [{ type: "input_text", text: `${environmentXml}\n${environmentXml}` }];
+    expect(() => extractChatGptTurnEnvironment(request)).toThrow("missing cwd");
   });
 
   test("accepts a trusted same-turn developer message between the environment and prompt", () => {
@@ -204,6 +235,9 @@ describe("trusted current Codex environment envelope", () => {
       roots: [root],
       sandboxPolicy: { type: "dangerFullAccess" },
     });
+    expect(extractChatGptTurnUserRevision(request)).toEqual([
+      { type: "input_text", text: "<skill name=\"repository-review\">Use this skill.</skill>" },
+    ]);
   });
 
   test("same-turn skill recovery cannot trust roots outside canonical workspace metadata", () => {

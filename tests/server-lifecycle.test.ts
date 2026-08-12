@@ -121,6 +121,8 @@ test("authenticated lifecycle control cancels orphaned browser turns", async () 
     browser: new Promise<string>(() => {}),
     trace: new ChatGptTraceFeed(),
     text: new ChatGptTextFeed(),
+    inputTokensFor: () => 0,
+    holdBrowserTextUntilFinalized: false,
     cancel: () => { cancelled += 1; },
   }));
 

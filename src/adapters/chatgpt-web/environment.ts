@@ -76,6 +76,11 @@ function rawMessageText(value: Record<string, unknown>): string {
     .join("\n");
 }
 
+function embeddedEnvironmentContexts(text: string): string[] {
+  return [...text.matchAll(/<environment_context>[\s\S]*?<\/environment_context>/g)]
+    .map(match => match[0]);
+}
+
 function contextualUserMessage(value: Record<string, unknown>): boolean {
   const text = rawMessageText(value).trim();
   return /^<environment_context>[\s\S]*<\/environment_context>$/.test(text)
@@ -255,6 +260,7 @@ function canonicalMetadataEnvironmentBeforeUser(
   userIndex: number,
   metadata: Record<string, unknown> | undefined,
   requireMetadataBoundRoots = false,
+  requireServerOwnedUserIds = false,
 ): string | undefined {
   if (userIndex <= 0 || !metadata) return undefined;
   const metadataTurnId = typeof metadata.turn_id === "string" ? metadata.turn_id.trim() : "";
@@ -262,9 +268,11 @@ function canonicalMetadataEnvironmentBeforeUser(
   if (!metadataTurnId || !metadataSandbox) return undefined;
 
   const user = record(input[userIndex]);
-  if (user?.type !== "message" || user.role !== "user" || typeof user.id !== "string" || !user.id) return undefined;
+  if (user?.type !== "message" || user.role !== "user") return undefined;
   const userTurnId = itemTurnId(user);
-  if (userTurnId !== undefined && userTurnId !== metadataTurnId) return undefined;
+  const userServerOwned = typeof user.id === "string" && user.id.length > 0;
+  if (requireServerOwnedUserIds && !userServerOwned) return undefined;
+  if (userTurnId === undefined ? !userServerOwned : userTurnId !== metadataTurnId) return undefined;
 
   let candidateIndex = userIndex - 1;
   let candidate = record(input[candidateIndex]);
@@ -275,25 +283,53 @@ function canonicalMetadataEnvironmentBeforeUser(
     candidateIndex -= 1;
     candidate = record(input[candidateIndex]);
   }
-  if (candidate?.type !== "message" || candidate.role !== "user" || typeof candidate.id !== "string" || !candidate.id) return undefined;
+  if (candidate?.type !== "message" || candidate.role !== "user") return undefined;
   const candidateTurnId = itemTurnId(candidate);
-  if (candidateTurnId !== undefined && candidateTurnId !== metadataTurnId) return undefined;
+  const candidateServerOwned = typeof candidate.id === "string" && candidate.id.length > 0;
+  if (requireServerOwnedUserIds && !candidateServerOwned) return undefined;
+  if (candidateTurnId === undefined ? !candidateServerOwned : candidateTurnId !== metadataTurnId) return undefined;
 
   const content = Array.isArray(candidate.content) ? candidate.content : [];
+  const candidateEnvironmentContexts = embeddedEnvironmentContexts(rawMessageText(candidate));
+  if (candidateEnvironmentContexts.length !== 1) return undefined;
   for (const part of content) {
     const text = record(part)?.text;
     if (typeof text !== "string") continue;
-    const trimmed = text.trim();
-    if (!/^<environment_context>[\s\S]*<\/environment_context>$/.test(trimmed)) continue;
-    // Current Codex stamps server-owned item IDs but not per-item turn IDs on the initial request,
-    // and canonical workspaces contains Git enrichment rather than filesystem authority. Bind the
-    // structurally adjacent context (allowing only provenance-checked developer messages) to
-    // canonical turn/sandbox metadata; when Git roots are present, require the primary cwd to agree
-    // with them as an additional check.
-    if (!environmentMatchesCanonicalMetadata(trimmed, metadata, requireMetadataBoundRoots)) continue;
-    return trimmed;
+    for (const environmentText of embeddedEnvironmentContexts(text)) {
+      // Codex 0.145 can append generated context blocks in one text part, while newer clients
+      // split them into separate parts. The unique envelope still has to match canonical roots and
+      // sandbox metadata, so surrounding user-role text cannot widen filesystem authority.
+      if (!environmentMatchesCanonicalMetadata(environmentText, metadata, requireMetadataBoundRoots)) continue;
+      return environmentText;
+    }
   }
   return undefined;
+}
+
+/**
+ * Validate a server-appended user item that follows the real current-turn instruction. Codex may
+ * omit per-item turn IDs on an initial request, so that legacy shape is accepted only when an
+ * earlier user item is itself bound to canonical turn, sandbox, and workspace metadata.
+ */
+export function isTrustedCurrentTurnAuxiliaryUserTail(
+  parsed: CodexParsedRequest,
+  userIndex: number,
+): boolean {
+  const body = record(parsed._rawBody);
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const metadata = clientTurnMetadata(parsed);
+  const metadataTurnId = typeof metadata?.turn_id === "string" ? metadata.turn_id.trim() : "";
+  const user = record(input[userIndex]);
+  if (!metadataTurnId
+    || user?.type !== "message"
+    || user.role !== "user") return false;
+  const userTurnId = itemTurnId(user);
+  if (userTurnId !== undefined) return userTurnId === metadataTurnId;
+  if (typeof user.id !== "string" || user.id.length === 0) return false;
+  for (let index = userIndex - 1; index > 0; index -= 1) {
+    if (canonicalMetadataEnvironmentBeforeUser(input, index, metadata, true)) return true;
+  }
+  return false;
 }
 
 function hasAssistantOutputBetween(input: unknown[], startIndex: number, endIndex: number): boolean {
@@ -371,6 +407,7 @@ function rawEnvironmentText(parsed: CodexParsedRequest): string | undefined {
         input,
         index,
         { ...metadata, turn_id: historicalTurnId, sandbox: canonicalSandboxMetadata(metadata) },
+        true,
         true,
       );
       if (bounded === historical) return bounded;

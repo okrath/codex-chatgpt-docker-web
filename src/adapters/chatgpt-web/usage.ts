@@ -3,6 +3,7 @@ import type { CodexParsedRequest, CodexUsage } from "../../types";
 import { compileLunaBudgetedPrompt } from "./luna-context-slimming";
 import { extractChatGptTurnIdentity } from "./environment";
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
+import type { CompileChatGptWebPromptOptions } from "./prompt";
 import type { BrokerToolRequest } from "./turn-broker";
 
 // The real capability has the same length. Keeping it out of usage accounting would make
@@ -22,6 +23,7 @@ function conservativeTextTokens(text: string, modelId: string): number {
 export function estimateChatGptWebInputTokens(
   parsed: CodexParsedRequest,
   capabilities: ChatGptWebCapabilities,
+  options?: CompileChatGptWebPromptOptions,
 ): number {
   const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   const identity = extractChatGptTurnIdentity(parsed);
@@ -32,7 +34,7 @@ export function estimateChatGptWebInputTokens(
     parsed,
     capabilities,
     mode.localTools ? ESTIMATE_TURN_TOKEN : undefined,
-    {
+    options ?? {
       captureLunaCheckpoint: parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID
         && !parsed._compactionRequest
         && Boolean(identity.threadId && identity.turnId),
@@ -61,8 +63,9 @@ export function estimateChatGptWebUsage(
   parsed: CodexParsedRequest,
   evidence: ChatGptWebRoundEvidence,
   capabilities: ChatGptWebCapabilities,
+  inputTokens?: number,
 ): CodexUsage {
-  const inputTokens = estimateChatGptWebInputTokens(parsed, capabilities);
+  inputTokens ??= estimateChatGptWebInputTokens(parsed, capabilities);
   const outputTokens = conservativeTextTokens(roundEvidenceText(evidence), parsed.modelId);
   return {
     inputTokens,

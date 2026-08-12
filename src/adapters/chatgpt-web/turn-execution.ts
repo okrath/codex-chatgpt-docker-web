@@ -118,6 +118,8 @@ interface ChatGptTurnRuntimeBase {
   browser: Promise<string>;
   trace: ChatGptTraceFeed;
   text: ChatGptTextFeed;
+  inputTokensFor: (parsed: CodexParsedRequest) => number;
+  holdBrowserTextUntilFinalized: boolean;
   cancel: () => void;
 }
 
@@ -181,6 +183,8 @@ export class ChatGptTurnSession {
   private finalReasoning: string[] = [];
   private outstandingPrelude: AdapterEvent[] = [];
   private finalPrelude: AdapterEvent[] = [];
+  private finalPreludeInitialized = false;
+  private heldBrowserTextDeltas: string[] = [];
   private settledBrowserOutcome?: ChatGptBrowserOutcome;
   private tail: Promise<void> = Promise.resolve();
 
@@ -264,10 +268,23 @@ export class ChatGptTurnSession {
 
   setFinalEvents(events: AdapterEvent[]): void {
     this.finalPrelude = [...events];
+    this.finalPreludeInitialized = true;
   }
 
   eventsForFinalReplay(): AdapterEvent[] {
     return [...this.finalPrelude];
+  }
+
+  hasFinalReplay(): boolean {
+    return this.finalPreludeInitialized;
+  }
+
+  holdBrowserText(deltas: string[]): void {
+    this.heldBrowserTextDeltas.push(...deltas);
+  }
+
+  drainHeldBrowserText(): string[] {
+    return this.heldBrowserTextDeltas.splice(0);
   }
 
   cancel(): void {
