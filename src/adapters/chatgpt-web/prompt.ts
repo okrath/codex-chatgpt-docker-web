@@ -266,8 +266,9 @@ export function compileChatGptWebPrompt(
     ? [
       "After the complete user-facing answer, append one private rolling task checkpoint for the next Luna turn.",
       `Append the exact marker ${CHATGPT_LUNA_CHECKPOINT_MARKER} on its own line, followed by one compact plain-text checkpoint and nothing else. Do not write JSON and do not use a Markdown code fence.`,
-      "Use the headings Objective:, State:, Evidence:, Decisions:, and Pending:. Put each heading on its own line and use concise dash bullets under the list headings.",
-      `Keep the checkpoint at or below ${CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS.toLocaleString("en-US")} tokens. Preserve concrete requirements, exact paths, commands, results, decisions, unresolved blockers, and the next useful actions.`,
+      "Use these headings, each on its own line with concise dash bullets under the list headings: Objective:, Decisions:, Files touched:, Learned facts:, Open work:.",
+      "This is a rolling record, not a fresh summary: when the previous turn's checkpoint is present in the context, carry every still-relevant item forward, add what this turn established, and remove only items that are now resolved or superseded. Do not restart it from scratch or let earlier decisions and touched files silently drop out.",
+      `Keep the checkpoint at or below ${CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS.toLocaleString("en-US")} tokens. Preserve concrete requirements, exact paths, commands, results, decisions, unresolved blockers, and the next useful actions; when over budget, drop the oldest already-resolved detail first.`,
       "Record only compact task state and evidence. Do not include hidden reasoning, chain-of-thought, capability tokens, credentials, or transport details.",
       "The outer bridge removes this marker and checkpoint from the user-facing stream. Never refer to the checkpoint in the visible answer.",
     ]

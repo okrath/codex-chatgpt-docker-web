@@ -37,8 +37,8 @@ the failed fail-closed loader designs. Three independent improvements:
 | Phase | Name | Status |
 |---|---|---|
 | 1 | [Fail-open history tools](./phase-01-fail-open-history-tools.md) | implemented; static green, live smoke pending |
-| 2 | [Budgeted collapse index](./phase-02-collapse-index.md) | planned |
-| 3 | [Structured rolling checkpoint](./phase-03-structured-checkpoint.md) | planned |
+| 2 | [Budgeted collapse index](./phase-02-collapse-index.md) | implemented; static green, live smoke pending |
+| 3 | [Structured rolling checkpoint](./phase-03-structured-checkpoint.md) | implemented; static green, live smoke pending |
 | 4 | [Validation, live smoke, docs](./phase-04-validation-and-docs.md) | planned |
 
 Phases 1–3 are independent; each can ship or roll back alone. Phase 4 gates README changes.

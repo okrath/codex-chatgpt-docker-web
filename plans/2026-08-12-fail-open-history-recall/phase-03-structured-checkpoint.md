@@ -1,6 +1,16 @@
 # Phase 03: structured rolling checkpoint
 
-Status: planned
+Status: implemented; static-verified (353 tests, typecheck green). Live smoke deferred to phase 4.
+
+## Result
+
+- `prompt.ts` `checkpointContract` only: headings are now Objective / Decisions / Files touched /
+  Learned facts / Open work, plus an explicit carry-forward instruction — treat the checkpoint as a
+  rolling record, carry still-relevant items forward, drop only resolved or superseded ones, never
+  restart from scratch. Over-budget guidance drops the oldest already-resolved detail first.
+- Capture/store/replay stay content-agnostic: no heading parsing anywhere, so freeform and legacy
+  checkpoints keep working (existing issue-89 opaque test still green).
+- Test: the prompt carries the new sections and the carry-forward wording when capture is enabled.
 
 ## Context
 

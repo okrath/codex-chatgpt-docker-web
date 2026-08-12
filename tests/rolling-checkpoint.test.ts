@@ -138,6 +138,17 @@ test("Luna prompt requests the strict private checkpoint only when capture is en
   expect(rolling.text).toContain(`${CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS.toLocaleString("en-US")} tokens`);
 });
 
+test("Luna checkpoint instruction is a carry-forward rolling record with durable sections", () => {
+  const parsed = request("thread_prompt", "turn_prompt", [message("user", "Inspect it.", "turn_prompt")]);
+  const capabilities = { localToolsEnabled: false, solAvailable: false, proAvailable: false };
+  const rolling = compileChatGptWebPrompt(parsed, capabilities, undefined, { captureLunaCheckpoint: true });
+  expect(rolling.text).toContain("Files touched:");
+  expect(rolling.text).toContain("Learned facts:");
+  expect(rolling.text).toContain("Open work:");
+  expect(rolling.text).toContain("carry every still-relevant item forward");
+  expect(rolling.text).toContain("Do not restart it from scratch");
+});
+
 test("Luna checkpoint replaces only exact-parent history and preserves the current native turn", () => {
   const root = mkdtempSync(join(tmpdir(), "codex-luna-checkpoint-"));
   roots.push(root);

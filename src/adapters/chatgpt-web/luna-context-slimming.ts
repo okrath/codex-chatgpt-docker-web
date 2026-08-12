@@ -288,6 +288,81 @@ export function collapseOldLunaHistory(
   return { messages: [...head, marker, ...messages.slice(cutoff)], collapsedCount: removed.length, estTokensRemoved, removed };
 }
 
+/**
+ * Token budget the collapse index may spend, indexed by escalation depth. A deeper cut means the
+ * turn is tighter, so the index shrinks and the deepest step drops it entirely — the marker then
+ * costs exactly what it did before the index existed, preserving convergence.
+ */
+export const LUNA_COLLAPSE_INDEX_STEP_BUDGETS: readonly number[] = [1_000, 600, 300, 0];
+const LUNA_COLLAPSE_INDEX_GROUP_START = 10;
+const LUNA_COLLAPSE_INDEX_SNIPPET_CHARS = 60;
+const LUNA_COLLAPSE_INDEX_LINE_MAX_CHARS = 120;
+
+function collapseIndexHeader(advertiseHistoryRecall: boolean): string {
+  return advertiseHistoryRecall
+    ? "\nCollapsed history index (load by index with the recall tools):\n"
+    : "\nCollapsed history index (older removed context):\n";
+}
+
+/** One index line per contiguous run of `groupSize` removed messages: range, role counts, a snippet. */
+function collapseIndexLines(removed: readonly RemovedHistoryMessage[], groupSize: number): string[] {
+  const lines: string[] = [];
+  for (let start = 0; start < removed.length; start += groupSize) {
+    const chunk = removed.slice(start, start + groupSize);
+    const first = chunk[0]!.index;
+    const last = chunk[chunk.length - 1]!.index;
+    const counts = new Map<string, number>();
+    for (const message of chunk) counts.set(message.role, (counts.get(message.role) ?? 0) + 1);
+    const roles = [...counts.entries()].map(([role, count]) => `${count} ${role}`).join(", ");
+    const firstUser = chunk.find(message => message.role === "user");
+    const snippet = firstUser
+      ? firstUser.text.trim().replace(/\s+/g, " ").slice(0, LUNA_COLLAPSE_INDEX_SNIPPET_CHARS)
+      : "";
+    const range = first === last ? `#${first}` : `#${first}–${last}`;
+    const line = `${range} · ${roles}${snippet ? ` · "${snippet}…"` : ""}`;
+    lines.push(line.length > LUNA_COLLAPSE_INDEX_LINE_MAX_CHARS ? `${line.slice(0, LUNA_COLLAPSE_INDEX_LINE_MAX_CHARS)}…` : line);
+  }
+  return lines;
+}
+
+/**
+ * Build a compact, budgeted table of contents for the collapsed span. Grouping starts at 10
+ * messages per line and coarsens (doubling) until the index fits the step budget; a single
+ * still-oversized index is truncated with an ellipsis. Deterministic — no model involvement.
+ */
+export function buildCollapsedHistoryIndex(
+  removed: readonly RemovedHistoryMessage[],
+  budgetTokens: number,
+  advertiseHistoryRecall: boolean,
+  modelId?: string,
+): string {
+  if (budgetTokens <= 0 || removed.length === 0) return "";
+  const header = collapseIndexHeader(advertiseHistoryRecall);
+  for (let groupSize = LUNA_COLLAPSE_INDEX_GROUP_START; ; groupSize *= 2) {
+    const lines = collapseIndexLines(removed, groupSize);
+    const text = header + lines.join("\n");
+    if (estimateTokens(text, modelId) <= budgetTokens) return text;
+    if (groupSize >= removed.length) {
+      // Coarsened as far as it goes; keep as many whole lines as the budget allows, then elide.
+      const kept: string[] = [];
+      let accumulated = header;
+      for (const line of lines) {
+        if (estimateTokens(`${accumulated + line}\n`, modelId) > budgetTokens) break;
+        kept.push(line);
+        accumulated += `${line}\n`;
+      }
+      return kept.length < lines.length ? `${header}${[...kept, "…"].join("\n")}` : header + kept.join("\n");
+    }
+  }
+}
+
+function appendCollapseIndexToMarker(messages: readonly CodexMessage[], indexText: string): CodexMessage[] {
+  return messages.map(message =>
+    typeof message.content === "string" && message.content.startsWith(LUNA_COLLAPSE_MARKER_PREFIX)
+      ? { ...message, content: message.content + indexText } as CodexMessage
+      : message);
+}
+
 export interface LunaBudgetedCompilation {
   compiled: CompiledChatGptWebPrompt;
   /** The message list the compiled prompt was built from (post-slimming). */
@@ -388,7 +463,7 @@ export function compileLunaBudgetedPrompt(
     { keepRecent: 2, collapseDevelopers: true },
     { keepRecent: 1, collapseDevelopers: true },
   ];
-  for (const step of escalation) {
+  for (const [stepIndex, step] of escalation.entries()) {
     if (result.estimatedTokens <= budget) break;
     const collapsed = collapseOldLunaHistory(
       working.context.messages,
@@ -401,7 +476,16 @@ export function compileLunaBudgetedPrompt(
     // Each step peels the older side of what the previous step kept, so appending yields the
     // collapsed messages in roughly chronological order; the index is a stable per-turn id.
     removedHistoryMessages.push(...collapsed.removed);
-    working = withMessages(collapsed.messages);
+    // Embed the budgeted index in the marker BEFORE recompiling, so the index tokens count toward
+    // the same budget check — a deeper step spends a smaller index budget, keeping convergence.
+    const indexBudget = LUNA_COLLAPSE_INDEX_STEP_BUDGETS[stepIndex] ?? 0;
+    const indexText = buildCollapsedHistoryIndex(
+      removedHistoryMessages.map((message, index) => ({ index, role: message.role, text: readableMessageText(message) })),
+      indexBudget,
+      advertiseHistoryRecall,
+      parsed.modelId,
+    );
+    working = withMessages(indexText ? appendCollapseIndexToMarker(collapsed.messages, indexText) : collapsed.messages);
     recompile();
   }
   if (working.context.messages.length < preCollapseCount) {

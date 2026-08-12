@@ -1,13 +1,20 @@
 import { expect, test } from "bun:test";
 import {
+  buildCollapsedHistoryIndex,
   collapseOldLunaHistory,
+  compileLunaBudgetedPrompt,
   condenseLunaRuleSections,
   describeLunaSlimming,
+  LUNA_COLLAPSE_INDEX_STEP_BUDGETS,
   LUNA_DISPOSABLE_RULE_SECTIONS,
   lunaDisposableRuleSections,
   stripLunaRuleSection,
 } from "../src/adapters/chatgpt-web/luna-context-slimming";
-import type { CodexMessage } from "../src/types";
+import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET } from "../src/adapters/chatgpt-web/input-tokens";
+import { CHATGPT_WEB_LUNA_MODEL_ID } from "../src/adapters/chatgpt-web/model";
+import { estimateTokens } from "../src/lib/token-estimate";
+import type { CodexMessage, CodexParsedRequest } from "../src/types";
+import type { RemovedHistoryMessage } from "../src/adapters/chatgpt-web/history-recall";
 
 const BIG = "x ".repeat(400);
 
@@ -179,6 +186,65 @@ test("collapse returns the verbatim removed messages and advertises recall only 
   const advertised = collapseOldLunaHistory(messages, undefined, 1, false, true);
   expect(advertised!.messages[0]!.content).toContain("__codex_search_collapsed_history_v1");
   expect(advertised!.messages[0]!.content).toContain("__codex_load_collapsed_history_v1");
+});
+
+function removedHistory(count: number): RemovedHistoryMessage[] {
+  return Array.from({ length: count }, (_unused, index) => ({
+    index,
+    role: index % 2 === 0 ? "user" : "toolResult",
+    text: index % 2 === 0 ? `user request number ${index} about the audit` : `tool output ${index}`,
+  }));
+}
+
+test("collapse index summarizes real content and switches header wording for Full mode", () => {
+  const removed = removedHistory(24);
+  const readOnly = buildCollapsedHistoryIndex(removed, LUNA_COLLAPSE_INDEX_STEP_BUDGETS[0]!, false);
+  expect(readOnly).toContain("older removed context");
+  expect(readOnly).toContain("#0–9");
+  expect(readOnly).toContain("user request number 0 about the audit");
+  expect(readOnly).toMatch(/\d+ user/);
+
+  const fullMode = buildCollapsedHistoryIndex(removed, LUNA_COLLAPSE_INDEX_STEP_BUDGETS[0]!, true);
+  expect(fullMode).toContain("load by index");
+});
+
+test("collapse index stays within its step budget even for a very long collapsed span", () => {
+  const removed = removedHistory(1_200);
+  for (const budget of LUNA_COLLAPSE_INDEX_STEP_BUDGETS) {
+    const index = buildCollapsedHistoryIndex(removed, budget, true);
+    if (budget === 0) {
+      expect(index).toBe("");
+      continue;
+    }
+    expect(estimateTokens(index)).toBeLessThanOrEqual(budget);
+    // Bounded line count: coarsening groups messages, so it is far below one line per message.
+    expect(index.split("\n").length).toBeLessThan(removed.length);
+  }
+});
+
+test("an over-budget Luna thread converges under budget with the index inside the collapse marker", () => {
+  const messages: CodexMessage[] = [];
+  for (let turn = 0; turn < 60; turn += 1) {
+    messages.push(userMessage(`turn ${turn} question ${BIG}`));
+    messages.push(assistantMessage(`turn ${turn} answer ${BIG}`));
+  }
+  messages.push(userMessage("current task: summarize the audit"));
+  const parsed = {
+    modelId: CHATGPT_WEB_LUNA_MODEL_ID,
+    stream: true,
+    options: { reasoning: undefined },
+    context: { systemPrompt: ["You are the model backend."], messages },
+  } as unknown as CodexParsedRequest;
+  const capabilities = { localToolsEnabled: true, solAvailable: false, proAvailable: false };
+
+  const result = compileLunaBudgetedPrompt(parsed, capabilities, "turn_12345678901234567890123456789012");
+  expect(result.estimatedTokens).toBeLessThanOrEqual(CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
+  expect(result.collapsedMessages).toBeGreaterThan(0);
+  expect(result.removedHistory.length).toBeGreaterThan(0);
+  expect(result.compiled.text).toContain("[bridge removed");
+  expect(result.compiled.text).toContain("Collapsed history index");
+  // The last removable index in the marker is loadable from the recall store.
+  expect(result.removedHistory.at(-1)!.index).toBe(result.removedHistory.length - 1);
 });
 
 test("the slimming summary names every applied action and reports the budget outcome", () => {

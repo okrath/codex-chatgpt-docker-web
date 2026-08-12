@@ -1,6 +1,19 @@
 # Phase 02: budgeted collapse index
 
-Status: planned
+Status: implemented; static-verified (353 tests, typecheck green). Live smoke deferred to phase 4.
+
+## Result
+
+- `luna-context-slimming.ts` only: `buildCollapsedHistoryIndex` groups the removed span into lines
+  (`#first–last · role counts · "snippet"`), coarsening 10→20→40… until the index fits the step
+  budget, then truncating with `…`. `LUNA_COLLAPSE_INDEX_STEP_BUDGETS = [1000, 600, 300, 0]`.
+- The escalation loop injects the index into the marker BEFORE recompiling, so the index tokens are
+  counted in the same budget check — a deeper step spends a smaller budget and the deepest step
+  (0) drops the index, so convergence is preserved by construction.
+- Header wording switches on Full mode ("load by index with the recall tools") vs read-only
+  ("older removed context"), so read-only Luna gets orientation without a misleading tool hint.
+- Tests: deterministic line content, budget bound for a 1,200-message span at every step budget,
+  and a 60-turn over-budget Luna thread that converges ≤ 28k with the index inside the marker.
 
 ## Context
 
