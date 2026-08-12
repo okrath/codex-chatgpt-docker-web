@@ -1,7 +1,7 @@
 ---
 title: "Deterministic multi-message preload"
 description: "Deliver an over-budget Luna turn as ordered browser messages — system prompt, rules, skill, then the task — so nothing user-authored is auto-cut and the 28k limit applies per message, not per turn."
-status: planned
+status: complete
 priority: P1
 branch: main
 tags: [feature, luna, transport, browser]

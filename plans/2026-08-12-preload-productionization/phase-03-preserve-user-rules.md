@@ -1,6 +1,6 @@
 # Phase 03 (A1): preserve user rule content by default
 
-Status: planned (blocked on phase 2)
+Status: done; static green.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # Phase 02 (A2): enable preload by default
 
-Status: planned (blocked on phase 1)
+Status: done; live-exercised (preload engaged automatically).
 
 ## Context
 

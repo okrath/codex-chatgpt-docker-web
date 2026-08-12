@@ -1,7 +1,7 @@
 ---
 title: "Fail-open history recall and checkpoint upgrade"
 description: "Give Luna turns verbatim access to collapsed history through optional broker tools, and densify what survives slimming: a budgeted collapse index and a structured rolling checkpoint."
-status: planned
+status: complete
 priority: P1
 branch: main
 tags: [feature, mcp, luna, context]

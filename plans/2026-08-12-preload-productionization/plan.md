@@ -1,7 +1,7 @@
 ---
 title: "Preload productionization: fallback, default-on, preserve user rules"
 description: "Make multi-message preload safe to enable by default — add a fallback when delivery fails, flip the default on, and preserve user-authored rule content instead of condensing it."
-status: planned
+status: complete
 priority: P1
 branch: main
 tags: [luna, preload, transport, policy]
@@ -62,7 +62,8 @@ the Web model and cost ~4-5k tokens).
   section is preloaded verbatim when preload is on. A regression test locks this in
   (`condensedTokens === 0`, the rule marker present in `compiled.preamble`); the five harness-only
   sections keep being dropped.
-- 361 tests pass, typecheck clean. Live smoke of the A3 fallback path is the remaining gate.
+- 361 tests pass, typecheck clean. The A3 fallback live smoke passed end-to-end; all three phases
+  are complete and the plan is closed.
 
 ## Acceptance criteria
 
