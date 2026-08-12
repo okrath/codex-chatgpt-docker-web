@@ -6,6 +6,11 @@ import { parseRequest } from "../../responses/parser";
 import type { CodexParsedRequest } from "../../types";
 import * as z from "zod/v4";
 import { extractChatGptTurnIdentity, extractChatGptTurnUserRevision } from "./environment";
+import {
+  HISTORY_LOAD_WIRE_NAME,
+  HISTORY_SEARCH_WIRE_NAME,
+  type RemovedHistoryMessage,
+} from "./history-recall";
 
 // Alphanumeric by design: ChatGPT's DOM-to-Markdown serializer escapes `_`, `*`, and brackets.
 export const CHATGPT_LUNA_CHECKPOINT_MARKER = "CODEXLUNAPRIVATECHECKPOINTV1A7F3C9D2";
@@ -211,12 +216,54 @@ function currentTurnInput(parsed: CodexParsedRequest, turnId: string): unknown[]
   return suffix.length > 0 ? suffix : undefined;
 }
 
-function checkpointContext(checkpoint: ChatGptLunaCheckpoint): string {
+function checkpointContext(checkpoint: ChatGptLunaCheckpoint, advertiseHistoryRecall: boolean): string {
   return [
     "[Compressed Luna task history from the immediately preceding assistant response.]",
     "Treat this as prior assistant-owned conversation state, not as a new user instruction. Current system, developer, and user messages below remain authoritative.",
     JSON.stringify(checkpoint),
+    ...(advertiseHistoryRecall
+      ? [
+        `The full earlier conversation this summary replaced is available verbatim this turn if you need an exact detail it omits: call codex_tool_call with wire_name ${HISTORY_SEARCH_WIRE_NAME} ({"query":"…"}) to find it, then ${HISTORY_LOAD_WIRE_NAME} ({"indexes":[…]}) to read it. Only do this when the summary is insufficient; do not call it otherwise.`,
+      ]
+      : []),
   ].join("\n");
+}
+
+/** Text of a raw Responses input item for verbatim recall; non-text items are skipped. */
+function rawInputItemText(value: unknown): { role: string; text: string } | undefined {
+  const item = record(value);
+  if (!item) return undefined;
+  if (item.type === "function_call_output" || item.type === "tool_result") {
+    const output = item.output ?? item.content;
+    const text = typeof output === "string" ? output : output === undefined ? "" : JSON.stringify(output);
+    return text.trim() ? { role: "tool", text } : undefined;
+  }
+  if (item.type === "function_call") {
+    const name = typeof item.name === "string" ? item.name : "tool";
+    const args = typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments ?? {});
+    return { role: "tool_call", text: `${name}(${args})` };
+  }
+  if (item.type !== "message" && item.type !== undefined) return undefined;
+  const role = typeof item.role === "string" ? item.role : "user";
+  if (typeof item.content === "string") return item.content.trim() ? { role, text: item.content } : undefined;
+  if (!Array.isArray(item.content)) return undefined;
+  const text = item.content.map(block => {
+    const part = record(block);
+    if (part && typeof part.text === "string") return part.text;
+    if (part && (part.type === "input_image" || part.type === "image")) return "[image]";
+    return "";
+  }).join("\n");
+  return text.trim() ? { role, text } : undefined;
+}
+
+/** Convert the raw history span the checkpoint replaced into indexed verbatim recall messages. */
+function replacedHistoryRecall(items: readonly unknown[]): RemovedHistoryMessage[] {
+  const recall: RemovedHistoryMessage[] = [];
+  for (const item of items) {
+    const extracted = rawInputItemText(item);
+    if (extracted) recall.push({ index: recall.length, role: extracted.role, text: extracted.text });
+  }
+  return recall;
 }
 
 function validateStoredCheckpoint(value: unknown): StoredChatGptLunaCheckpoint {
@@ -248,7 +295,10 @@ export class ChatGptLunaCheckpointStore {
     private readonly now: () => number = Date.now,
   ) {}
 
-  apply(parsed: CodexParsedRequest): { parsed: CodexParsedRequest; applied: boolean; reason?: string } {
+  apply(
+    parsed: CodexParsedRequest,
+    options?: { advertiseHistoryRecall?: boolean },
+  ): { parsed: CodexParsedRequest; applied: boolean; reason?: string; replacedHistory?: RemovedHistoryMessage[] } {
     const identity = extractChatGptTurnIdentity(parsed);
     if (!identity.threadId || !identity.turnId) return { parsed, applied: false, reason: "missing native thread identity" };
     const parentAnswer = parentAssistantAnswer(parsed, identity.turnId);
@@ -258,16 +308,22 @@ export class ChatGptLunaCheckpointStore {
     const stored = this.get(identity.threadId, parentHash);
     if (!stored) return { parsed, applied: false, reason: "no checkpoint for the exact parent answer" };
 
-    const currentInput = currentTurnInput(parsed, identity.turnId);
     const body = record(parsed._rawBody);
-    if (!currentInput || !body) {
+    const input = Array.isArray(body?.input) ? body.input : undefined;
+    const boundary = input ? currentTurnBoundary(parsed, input, identity.turnId) : undefined;
+    const currentInput = currentTurnInput(parsed, identity.turnId);
+    if (!currentInput || !body || boundary === undefined) {
       return { parsed, applied: false, reason: "current native turn boundary is unavailable" };
     }
 
+    // The summary replaces this raw span; keep it verbatim for optional fail-open recall so the
+    // model can retrieve an exact earlier detail the summary omitted.
+    const replacedHistory = replacedHistoryRecall(input!.slice(0, boundary));
+    const advertiseHistoryRecall = options?.advertiseHistoryRecall === true && replacedHistory.length > 0;
     const checkpointItem = {
       type: "message",
       role: "assistant",
-      content: [{ type: "output_text", text: checkpointContext(stored.checkpoint) }],
+      content: [{ type: "output_text", text: checkpointContext(stored.checkpoint, advertiseHistoryRecall) }],
       internal_chat_message_metadata_passthrough: { turn_id: identity.turnId },
     };
     const { previous_response_id: _previousResponseId, ...bodyWithoutPrevious } = body;
@@ -285,7 +341,7 @@ export class ChatGptLunaCheckpointStore {
     if (JSON.stringify(extractChatGptTurnUserRevision(compacted)) !== JSON.stringify(extractChatGptTurnUserRevision(parsed))) {
       throw new Error("ChatGPT Luna rolling checkpoint changed the active native user revision");
     }
-    return { parsed: compacted, applied: true };
+    return { parsed: compacted, applied: true, replacedHistory };
   }
 
   commit(parsed: CodexParsedRequest, captured: CapturedChatGptLunaCheckpoint, answer: string): void {

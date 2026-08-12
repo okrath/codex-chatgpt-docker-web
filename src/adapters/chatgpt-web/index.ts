@@ -29,6 +29,7 @@ import { ChatGptTurnFinalizationError, TurnBroker, type BrokerToolRequest, type 
 import { ChatGptTextFeed, ChatGptTraceFeed, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
 import { estimateChatGptWebInputTokens, estimateChatGptWebUsage } from "./usage";
 import { ChatGptThreadEnvironmentStore } from "./thread-environment";
+import type { RemovedHistoryMessage } from "./history-recall";
 import {
   ChatGptLunaCheckpointStore,
   type CapturedChatGptLunaCheckpoint,
@@ -207,12 +208,18 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const captureLunaCheckpoint = parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID
       && !parsed._compactionRequest
       && Boolean(identity.threadId && identity.turnId);
+    // Full mode can serve the raw history the checkpoint replaces back through the broker, so the
+    // checkpoint context advertises the recall tools and we stash that span for the turn.
+    const checkpointApplyOptions = { advertiseHistoryRecall: mode.localTools };
     const checkpointInput = captureLunaCheckpoint
-      ? lunaCheckpointStore.apply(parsed)
-      : { parsed, applied: false };
+      ? lunaCheckpointStore.apply(parsed, checkpointApplyOptions)
+      : { parsed, applied: false, replacedHistory: undefined as RemovedHistoryMessage[] | undefined };
+    const checkpointReplacedHistory = checkpointInput.replacedHistory ?? [];
     if (captureLunaCheckpoint) {
       console.info(
-        `[chatgpt-web] Luna rolling checkpoint applied=${checkpointInput.applied}${checkpointInput.reason ? ` reason=${checkpointInput.reason}` : ""}`,
+        `[chatgpt-web] Luna rolling checkpoint applied=${checkpointInput.applied}`
+        + `${checkpointInput.applied ? ` replacedHistory=${checkpointReplacedHistory.length}` : ""}`
+        + `${checkpointInput.reason ? ` reason=${checkpointInput.reason}` : ""}`,
       );
     }
     const canonicalToolInput = mode.localTools
@@ -248,7 +255,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const inputTokensFor = (currentParsed: CodexParsedRequest): number => {
       try {
         const currentCheckpointInput = captureLunaCheckpoint
-          ? lunaCheckpointStore.apply(currentParsed).parsed
+          ? lunaCheckpointStore.apply(currentParsed, checkpointApplyOptions).parsed
           : currentParsed;
         const currentCanonicalInput = mode.localTools
           ? {
@@ -376,10 +383,13 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         token.resolve(turnToken);
         try {
           const compiled = compilePromptWithLunaBudget(turnToken);
-          // Fail-open recall: keep the messages Luna slimming collapsed available verbatim through
-          // the broker's reserved history wire names. A turn that never calls them is unaffected.
-          const removedHistory = lastBudgetedCompilation?.removedHistory ?? [];
-          if (removedHistory.length > 0) broker.attachCollapsedHistory(turnToken, removedHistory);
+          // Fail-open recall: keep verbatim what the model can no longer see inline — the raw span
+          // the rolling checkpoint replaced, plus anything Luna slimming collapsed. Checkpoint-apply
+          // and history-collapse are mutually exclusive (collapse only fires when no checkpoint
+          // applied), so concatenating and reindexing keeps the collapse marker's indexes aligned.
+          const recallHistory = [...checkpointReplacedHistory, ...(lastBudgetedCompilation?.removedHistory ?? [])]
+            .map((message, index) => ({ ...message, index }));
+          if (recallHistory.length > 0) broker.attachCollapsedHistory(turnToken, recallHistory);
           return { ...compiled, release: () => {} };
         } catch (error) {
           broker.revoke(turnToken);

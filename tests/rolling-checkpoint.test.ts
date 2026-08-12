@@ -15,6 +15,7 @@ import {
   hashChatGptLunaAnswer,
   type ChatGptLunaCheckpoint,
 } from "../src/adapters/chatgpt-web/rolling-checkpoint";
+import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "../src/adapters/chatgpt-web/history-recall";
 
 const roots: string[] = [];
 
@@ -226,6 +227,43 @@ test("Luna checkpoint replaces only exact-parent history and preserves the curre
   const rejected = new ChatGptLunaCheckpointStore(path).apply(branch);
   expect(rejected.applied).toBe(false);
   expect(rejected.reason).toContain("exact parent");
+});
+
+test("checkpoint apply keeps the replaced history verbatim and advertises recall only in Full mode", () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-luna-checkpoint-recall-"));
+  roots.push(root);
+  const path = join(root, "checkpoints.json");
+  const threadId = "thread_recall";
+  const sourceTurnId = "turn_source";
+  const marker = "DEPLOY-TAG=RECALL-7Q2-XK";
+  const source = request(threadId, sourceTurnId, [
+    message("user", `First instruction mentioning ${marker} exactly once.`, sourceTurnId),
+  ]);
+  const answer = "Completed the first step.";
+  const store = new ChatGptLunaCheckpointStore(path);
+  store.commit(source, {
+    checkpoint: { version: 2, summary: "Objective:\nContinue the audit." },
+    answerHash: hashChatGptLunaAnswer(answer),
+  }, answer);
+
+  const next = request(threadId, "turn_next", [
+    message("user", `First instruction mentioning ${marker} exactly once.`, sourceTurnId),
+    message("assistant", answer, sourceTurnId),
+    message("user", "Continue with the second step", "turn_next"),
+  ]);
+
+  const readOnly = new ChatGptLunaCheckpointStore(path).apply(next);
+  expect(readOnly.applied).toBe(true);
+  // The replaced span is kept out-of-band, verbatim, never inside the compiled messages.
+  expect(readOnly.replacedHistory?.some(entry => entry.text.includes(marker))).toBe(true);
+  expect(JSON.stringify(readOnly.parsed.context.messages)).not.toContain(marker);
+  expect(JSON.stringify(readOnly.parsed.context.messages)).not.toContain(HISTORY_SEARCH_WIRE_NAME);
+
+  const fullMode = new ChatGptLunaCheckpointStore(path).apply(next, { advertiseHistoryRecall: true });
+  const encoded = JSON.stringify(fullMode.parsed.context.messages);
+  expect(encoded).toContain(HISTORY_SEARCH_WIRE_NAME);
+  expect(encoded).toContain(HISTORY_LOAD_WIRE_NAME);
+  expect(encoded).not.toContain(marker);
 });
 
 test("Luna checkpoint preserves the server-resolved backend model when the raw body carries a route slug", () => {

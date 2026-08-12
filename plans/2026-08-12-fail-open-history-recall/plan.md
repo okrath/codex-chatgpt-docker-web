@@ -20,6 +20,11 @@ the failed fail-closed loader designs. Three independent improvements:
 2. **Index (C/D bridge):** the collapse marker carries a budgeted table of contents.
 3. **Checkpoint (D):** the rolling checkpoint gets an advisory structure so decisions, touched
    files, facts, and open work survive turns.
+4. **Checkpoint-replaced recall (phase 5, added after live smoke):** live smoke showed collapse
+   stays dormant under healthy checkpointing, so recall was extended to also back the *checkpoint* —
+   the raw span the summary replaces is kept verbatim and fetchable, so the model can retrieve an
+   exact earlier detail the summary dropped. This is the path that actually addresses cross-turn
+   memory loss on Luna.
 
 ## Design stance (from evidence)
 
@@ -40,6 +45,7 @@ the failed fail-closed loader designs. Three independent improvements:
 | 2 | [Budgeted collapse index](./phase-02-collapse-index.md) | implemented; static green, live smoke pending |
 | 3 | [Structured rolling checkpoint](./phase-03-structured-checkpoint.md) | implemented; static green, live smoke pending |
 | 4 | [Validation, live smoke, docs](./phase-04-validation-and-docs.md) | planned |
+| 5 | [Recall the history the checkpoint replaced](./phase-05-checkpoint-replaced-history-recall.md) | implemented; static green, live smoke pending |
 
 Phases 1–3 are independent; each can ship or roll back alone. Phase 4 gates README changes.
 
