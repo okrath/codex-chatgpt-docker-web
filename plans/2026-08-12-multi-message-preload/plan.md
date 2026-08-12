@@ -52,9 +52,9 @@ ceremony, and it works in browser-only and Pro modes too. Precedence per turn:
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 | [Chunked delivery mechanics](./phase-01-chunked-delivery-mechanics.md) | implemented; static green, DOM loop live-gated |
-| 2 | [Semantic splitter and policy integration](./phase-02-semantic-splitter-and-policy.md) | implemented behind opt-in flag; static green |
-| 3 | [Live smoke, limits reconnaissance, docs](./phase-03-live-smoke-and-docs.md) | planned — enable with `CODEX_CHATGPT_WEB_LUNA_PRELOAD=on` to run |
+| 1 | [Chunked delivery mechanics](./phase-01-chunked-delivery-mechanics.md) | done; DOM loop live-verified |
+| 2 | [Semantic splitter and policy integration](./phase-02-semantic-splitter-and-policy.md) | done behind opt-in flag; static green |
+| 3 | [Live smoke, limits reconnaissance, docs](./phase-03-live-smoke-and-docs.md) | done; 1- and 2-part passed live, ~3-message Free-tier limit found, part cap added |
 
 ## How to live-test (phase 3)
 

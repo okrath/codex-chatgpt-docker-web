@@ -174,6 +174,17 @@ The checkpoint itself is a structured, carry-forward record — it keeps Objecti
 touched, Learned facts, and Open work across turns and updates them rather than rewriting each turn,
 so important detail ages out less often even before recall is needed.
 
+### Multi-message preload (experimental, opt-in)
+
+An alternative to collapsing an over-budget turn: split it into ordered earlier-context messages
+plus a final task message, each within the transport budget, delivered into the same chat so the
+Web model accumulates the whole thread in its window. Enable with
+`CODEX_CHATGPT_WEB_LUNA_PRELOAD=on` (off by default; the default behavior is unchanged). Live smoke
+on a free account confirmed it works, and also found that ChatGPT Free stops acknowledging after
+about three rapid messages in one chat, so preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3)
+and a turn that would need more parts falls back to collapse. It engages only on turns that exceed
+the budget, so it never changes a turn that already fits.
+
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):

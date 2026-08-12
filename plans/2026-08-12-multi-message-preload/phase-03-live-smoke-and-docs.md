@@ -1,6 +1,39 @@
 # Phase 03: live smoke, limits reconnaissance, docs
 
-Status: planned
+Status: live smoke passed on free Luna; reconnaissance complete; two fixes landed.
+
+## Live smoke result (2026-08-12, free Luna, preload on, lowered budget to force splits)
+
+- **1-part (2 messages):** full end-to-end pass — part delivered and acknowledged, final task answered.
+- **2-part (3 messages):** full pass — `preload part 1/2` and `2/2` each completed in ~7-8s, then
+  the final task message answered. Repeated cleanly across several turns.
+- **4-part (5 messages):** parts 1-3 completed in ~6.5s each; **part 4 never acknowledged and timed
+  out at 180s**, failing the turn. No rate-limit dialog appeared — a silent throttle. The per-chat
+  limit resets per turn (each retry replayed parts 1-3 fine).
+
+## Findings and fixes
+
+1. **Composer preservation (fixed):** a raw-text preload part failed the exact after-insertion
+   verification (multi-line text becomes many Lexical blocks). Fix: serialize each part as the same
+   escaped JSON envelope the main prompt uses, and size parts by the serialized length.
+2. **Free-tier per-chat message limit ≈ 3 (fixed):** the 4th rapid message stalls. Fix:
+   `LUNA_PRELOAD_MAX_PARTS` (default 3, env-overridable); a turn needing more parts falls back to
+   collapse instead of failing.
+
+## Reconnaissance conclusions
+
+- Safe preload depth on Free Luna is ~3 messages total (so ~2 context parts + the final). At the
+  real 28k budget each part is ~20k tokens, so preload covers turns up to roughly 2×20k of peelable
+  older context before the cap forces a fallback — beyond that, collapse (with verbatim recall)
+  handles it.
+- Part delivery is ~6.5-8s each; no inter-part delay was needed below the cap.
+- Rate limiting here is silent (no dialog), so the 180s per-part timeout is the backstop.
+
+## Deferred
+
+- README stays minimal (an experimental opt-in note) until preload is enabled by default; enabling
+  by default depends on the rule-keep policy flip (phase 2 deferred item).
+- A future paid-tier pass could measure a higher part cap.
 
 ## Context
 
