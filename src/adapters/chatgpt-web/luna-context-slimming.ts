@@ -7,6 +7,7 @@ import {
 import { CHATGPT_WEB_LUNA_MODEL_ID, resolveChatGptWebModelMode, type ChatGptWebCapabilities } from "./model";
 import {
   compileChatGptWebPrompt,
+  withoutRetiredTurnHandles,
   type CompiledChatGptWebPrompt,
   type CompileChatGptWebPromptOptions,
 } from "./prompt";
@@ -391,32 +392,50 @@ function splitTextByTokenBudget(text: string, targetTokens: number, modelId?: st
   return out;
 }
 
-/** Group older messages into preload parts, each within the per-part token budget. */
+interface PreamblePart { role: string; content: string }
+
+/**
+ * Serialize a preload part as an escaped JSON envelope, exactly like the main prompt, so ChatGPT's
+ * Lexical composer preserves it byte-for-byte. Raw multi-line text renders into many editor blocks
+ * and fails the composer's exact-text verification (found in live smoke); JSON escapes the newlines.
+ */
+function serializePreamblePart(parts: PreamblePart[]): string {
+  return withoutRetiredTurnHandles(JSON.stringify({ earlier_context: parts }));
+}
+
+/**
+ * Group older messages into preload parts, each serialized part within the per-part token budget.
+ * Sizing is measured on the serialized JSON (not the raw text) so escaping and wrapper overhead can
+ * never push a delivered part over budget. A single oversized message is split by characters, with
+ * a reduced text target that leaves room for the JSON wrapper.
+ */
 export function chunkMessagesIntoPreamble(
   messages: readonly CodexMessage[],
   budgetTokens: number,
   modelId?: string,
 ): string[] {
   const target = Math.max(1, Math.floor(budgetTokens * LUNA_PRELOAD_PART_BUDGET_FRACTION));
+  const splitTextTarget = Math.max(1, Math.floor(target * 0.7));
   const chunks: string[] = [];
-  let current: string[] = [];
-  let currentTokens = 0;
+  let current: PreamblePart[] = [];
   const flush = (): void => {
-    if (current.length > 0) chunks.push(current.join("\n\n"));
+    if (current.length > 0) chunks.push(serializePreamblePart(current));
     current = [];
-    currentTokens = 0;
   };
   for (const message of messages) {
-    const block = `[${message.role}]\n${readableMessageText(message)}`;
-    const blockTokens = estimateTokens(block, modelId);
-    if (blockTokens > target) {
+    const text = readableMessageText(message);
+    const single = { role: message.role, content: text };
+    if (estimateTokens(serializePreamblePart([single]), modelId) > target) {
       flush();
-      for (const piece of splitTextByTokenBudget(block, target, modelId)) chunks.push(piece);
+      for (const piece of splitTextByTokenBudget(text, splitTextTarget, modelId)) {
+        chunks.push(serializePreamblePart([{ role: message.role, content: piece }]));
+      }
       continue;
     }
-    if (currentTokens + blockTokens > target) flush();
-    current.push(block);
-    currentTokens += blockTokens;
+    if (current.length > 0 && estimateTokens(serializePreamblePart([...current, single]), modelId) > target) {
+      flush();
+    }
+    current.push(single);
   }
   flush();
   return chunks;
