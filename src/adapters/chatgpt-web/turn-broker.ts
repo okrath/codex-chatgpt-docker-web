@@ -629,9 +629,18 @@ export class TurnBroker {
       }
       const history = binding.channel.collapsedHistory;
       if (!history || history.length === 0) throw new Error("This Codex turn has no collapsed history to recall");
-      return request.method === "search_history"
-        ? this.searchCollapsedHistory(history, request.query, request.limit)
-        : this.loadCollapsedHistory(history, request.indexes);
+      if (request.method === "search_history") {
+        const found = this.searchCollapsedHistory(history, request.query, request.limit);
+        console.info(
+          `[chatgpt-web] broker trace=${binding.channel.traceId} history search matches=${found.matches.length}/${history.length}`,
+        );
+        return found;
+      }
+      const loaded = this.loadCollapsedHistory(history, request.indexes);
+      console.info(
+        `[chatgpt-web] broker trace=${binding.channel.traceId} history load indexes=${(request.indexes ?? []).length} truncated=${loaded.truncated}`,
+      );
+      return loaded;
     }
 
     const wireName = request.wireName?.trim();
