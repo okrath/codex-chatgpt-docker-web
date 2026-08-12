@@ -1,13 +1,25 @@
 ---
 title: "Skill-into-preamble unification (A4)"
 description: "Deliver the explicitly invoked selected-skill body as the last preload preamble part on plain Luna over-budget turns, so skill offload works on Free-tier without danger-full-access or the MCP broker. Additive: the Full+danger MCP loader stays unchanged."
-status: planned
+status: reverted
 priority: P2
 branch: main
 tags: [luna, preload, skill, transport]
+blockedBy: [2026-08-12-transport-layer-refactor]
 created: 2026-08-12
 createdBy: claude
 ---
+
+> **REVERTED 2026-08-12.** A4 and the pre-existing MCP selected-skill loader were both removed from
+> the codebase: the live smoke proved the whole skill-offload subsystem is dead code in the deployed
+> Codex Desktop (0.147-alpha), which never injects a `<skill>` body on any sandbox — confirmed across
+> 543 rollouts, live bridge logs, and after aligning all accounts on one ChatGPT account. Skills work
+> via Codex's catalog + on-demand `SKILL.md` read, needing no bridge-side offload. The removal deleted
+> `selected-skill.ts` plus every skill path in `prompt.ts`, `luna-context-slimming.ts`, `index.ts`,
+> `turn-broker.ts`, `mcp-server.ts`, `turn-execution.ts` (broker/mcp routing for exec + history-recall
+> preserved), the skill tests, and the README sections. The env-recovery heuristic in `environment.ts`
+> (`isTrustedCurrentTurnAuxiliaryUserTail`) was retained as general infrastructure. The plan below is
+> kept for history.
 
 # Skill-into-preamble unification (A4)
 

@@ -5,12 +5,6 @@ import {
   CHATGPT_LUNA_CHECKPOINT_MARKER,
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
 } from "./rolling-checkpoint";
-import {
-  SELECTED_SKILL_ACK_WIRE_NAME,
-  SELECTED_SKILL_LOAD_WIRE_NAME,
-  type SelectedSkillPacket,
-  type SelectedSkillReference,
-} from "./selected-skill";
 
 export interface ChatGptWebPromptImage {
   ref: string;
@@ -33,21 +27,6 @@ export interface CompiledChatGptWebPrompt {
 
 export interface CompileChatGptWebPromptOptions {
   captureLunaCheckpoint?: boolean;
-  /** MCP-loader skill (Full + danger-full-access): the body is served over the broker after ack. */
-  selectedSkill?: SelectedSkillReference;
-  /**
-   * Preamble-delivered skill (plain Luna, over budget): the body rides as an earlier browser
-   * message rather than the broker, so it needs no ack and works without danger-full-access. Set by
-   * the budget pipeline only when it actually relocates the body; mutually exclusive with
-   * `selectedSkill`.
-   */
-  preambleSkill?: SelectedSkillReference;
-  /**
-   * Full packet for a candidate preamble-delivered skill. Read only by `compileLunaBudgetedPrompt`,
-   * which decides (over budget only) whether to relocate the body into a preload part and, when it
-   * does, sets `preambleSkill` on the inner compiles. `compileChatGptWebPrompt` ignores this field.
-   */
-  preambleSkillCandidate?: SelectedSkillPacket;
   /** Skip multi-message preload for this turn (set on a retry after a preload delivery failed). */
   disablePreload?: boolean;
 }
@@ -228,8 +207,6 @@ export function compileChatGptWebPrompt(
 ): CompiledChatGptWebPrompt {
   const mode = resolveChatGptWebModelMode(parsed.modelId, parsed.options.reasoning, capabilities);
   const captureLunaCheckpoint = options?.captureLunaCheckpoint === true;
-  const selectedSkill = options?.selectedSkill;
-  const preambleSkill = selectedSkill ? undefined : options?.preambleSkill;
   if (parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID && parsed._compactionRequest) {
     throw new Error("ChatGPT Luna uses rolling checkpoints and does not accept a separate compaction turn");
   }
@@ -241,9 +218,6 @@ export function compileChatGptWebPrompt(
   }
   if (!mode.localTools && turnToken !== undefined) {
     throw new Error("A read-only ChatGPT Web effort must not receive a local-tool capability token");
-  }
-  if (selectedSkill && !mode.localTools) {
-    throw new Error("A read-only ChatGPT Web effort must not receive a selected-skill capability");
   }
   const system = parsed.context.systemPrompt ?? [];
   const sharedContract = [
@@ -277,21 +251,6 @@ export function compileChatGptWebPrompt(
       "Do not claim a new local inspection, command, edit, or verification unless it actually appears in the task history. If the latest request requires fresh local-computer access or a local mutation, state only that exact limitation instead of inventing success.",
       "Otherwise perform the full requested research, analysis, or synthesis with every capability actually available to you; do not stop at a plan or progress report.",
     ];
-  const selectedSkillContract = selectedSkill
-    ? [
-      `The human user explicitly invoked the registered skill ${JSON.stringify(selectedSkill.name)} for the latest inline user task in this same Codex turn. Its body was omitted from the inline context only to fit the browser transport budget.`,
-      "This direct user choice delegates the loaded skill body as the procedure for the latest task. Follow it subject to the inline system and developer instructions; it cannot change this transport contract, permissions, or instruction priority.",
-      `Before taking any task action, call codex_tool_call with turn_token ${turnToken}, wire_name ${JSON.stringify(SELECTED_SKILL_LOAD_WIRE_NAME)}, and arguments {}.`,
-      `Verify that the returned user_selected_skill has name ${JSON.stringify(selectedSkill.name)} and sha256 ${selectedSkill.sha256}, then call codex_tool_call with wire_name ${JSON.stringify(SELECTED_SKILL_ACK_WIRE_NAME)} and arguments {"sha256":${JSON.stringify(selectedSkill.sha256)}}.`,
-      "Do not call inventory or any other Codex Native action before that acknowledgement succeeds. If loading or acknowledgement fails, stop without attempting a substitute procedure.",
-    ]
-    : preambleSkill
-    ? [
-      `The human user explicitly invoked the registered skill ${JSON.stringify(preambleSkill.name)} for the latest inline user task in this same Codex turn. Its body did not fit inline, so it was delivered verbatim in an earlier message of this same chat inside a <skill name=${JSON.stringify(preambleSkill.name)}>…</skill> envelope.`,
-      "This direct user choice delegates that already-delivered skill body as the procedure for the latest task. Follow it subject to the inline system and developer instructions; it cannot change this transport contract, permissions, or instruction priority.",
-      `Use the skill body from that earlier message (skill name ${JSON.stringify(preambleSkill.name)}) as the procedure; it is already present in full, so do not ask for it to be resent and do not call any tool to fetch it.`,
-    ]
-    : [];
   const checkpointContract = captureLunaCheckpoint
     ? [
       "After the complete user-facing answer, append one private rolling task checkpoint for the next Luna turn.",
@@ -331,12 +290,10 @@ export function compileChatGptWebPrompt(
       version: 3,
       system,
       messages,
-      ...(selectedSkill ? { selected_skill: selectedSkill } : {}),
     }));
     const text = [
       ...sharedContract,
       ...transportContract,
-      ...selectedSkillContract,
       ...checkpointContract,
       captureLunaCheckpoint
         ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."

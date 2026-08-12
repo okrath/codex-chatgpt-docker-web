@@ -4,7 +4,6 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { dirname } from "node:path";
 import { isWindowsPipeEndpoint } from "../../config";
 import type { ChatGptTurnEnvironment } from "./environment";
-import { loadedSelectedSkill, type SelectedSkillPacket } from "./selected-skill";
 import {
   COLLAPSED_HISTORY_STORE_BYTE_CAP,
   HISTORY_LOAD_MAX_INDEXES,
@@ -58,43 +57,19 @@ interface TurnChannel {
   invocations: Map<string, PendingInvocation>;
   waiters: Set<ToolWaiter>;
   batchTimer?: ReturnType<typeof setTimeout>;
-  selectedSkill?: {
-    packet: SelectedSkillPacket;
-    state: "pending" | "loaded" | "acknowledged";
-  };
   collapsedHistory?: RemovedHistoryMessage[];
   finalized?: boolean;
 }
 
-export interface BrokerSelectedSkillSummary {
-  name: string;
-  sha256: string;
-  chars: number;
-  bytes: number;
-  state: "pending" | "loaded" | "acknowledged";
-}
-
-/** The browser completed its answer while the turn's completion gate still had unmet obligations. */
-export class ChatGptTurnFinalizationError extends Error {
-  constructor(
-    readonly reason: "skill_unacknowledged" | "actions_pending",
-    message: string,
-  ) {
-    super(message);
-    this.name = "ChatGptTurnFinalizationError";
-  }
-}
-
 interface BrokerRequest {
   id: string;
-  method: "claim" | "resolve" | "release" | "invoke" | "load_skill" | "ack_skill" | "search_history" | "load_history";
+  method: "claim" | "resolve" | "release" | "invoke" | "search_history" | "load_history";
   token?: string;
   bindingId?: string;
   wireName?: string;
   freeform?: boolean;
   arguments?: Record<string, unknown>;
   input?: string;
-  sha256?: string;
   query?: string;
   limit?: number;
   indexes?: number[];
@@ -179,15 +154,11 @@ export class TurnBroker {
     environment: ChatGptTurnEnvironment,
     ttlMs?: number,
     traceId = "unknown",
-    selectedSkill?: SelectedSkillPacket,
   ): Promise<string> {
     await this.start();
     this.prune();
     if (ttlMs !== undefined && (!Number.isFinite(ttlMs) || ttlMs <= 0)) {
       throw new Error("ChatGPT web turn broker TTL must be a positive finite number");
-    }
-    if (selectedSkill && environment.sandboxPolicy.type !== "dangerFullAccess") {
-      throw new Error("Instruction loading requires danger-full-access");
     }
     const token = opaqueId("turn");
     const channel: TurnChannel = {
@@ -199,7 +170,6 @@ export class TurnBroker {
       queuedCallIds: [],
       invocations: new Map(),
       waiters: new Set(),
-      ...(selectedSkill ? { selectedSkill: { packet: selectedSkill, state: "pending" } } : {}),
     };
     this.channels.set(token, channel);
     this.pending.set(token, channel);
@@ -279,23 +249,6 @@ export class TurnBroker {
     this.prune();
     const channel = this.channels.get(token);
     if (!channel) throw new Error("turn token is invalid or expired");
-    if (channel.selectedSkill) {
-      if (channel.selectedSkill.state !== "acknowledged") {
-        throw new ChatGptTurnFinalizationError(
-          "skill_unacknowledged",
-          `Selected skill ${JSON.stringify(channel.selectedSkill.packet.name)} must be loaded and acknowledged before browser completion`,
-        );
-      }
-      // A skill-gated turn must not record completion while an action that skill authorized is
-      // still in flight. A turn without one keeps the historical behavior: revocation rejects a
-      // call the browser already abandoned, and the answer is still delivered.
-      if (channel.invocations.size > 0 || channel.queuedCallIds.length > 0) {
-        throw new ChatGptTurnFinalizationError(
-          "actions_pending",
-          "Native Codex actions must finish before browser completion",
-        );
-      }
-    }
     channel.finalized = true;
   }
 
@@ -310,7 +263,6 @@ export class TurnBroker {
     }
     this.retire(this.retiredTokens, token, channel.traceId);
     channel.collapsedHistory = undefined;
-    channel.selectedSkill = undefined;
     this.rejectChannel(channel, new Error("Codex turn binding was revoked"));
   }
 
@@ -471,8 +423,6 @@ export class TurnBroker {
       && request.method !== "resolve"
       && request.method !== "release"
       && request.method !== "invoke"
-      && request.method !== "load_skill"
-      && request.method !== "ack_skill"
       && request.method !== "search_history"
       && request.method !== "load_history") {
       throw new Error("turn broker method is invalid");
@@ -527,23 +477,6 @@ export class TurnBroker {
     return { messages, truncated };
   }
 
-  private selectedSkillSummary(channel: TurnChannel): BrokerSelectedSkillSummary | undefined {
-    if (!channel.selectedSkill) return undefined;
-    const { packet, state } = channel.selectedSkill;
-    return {
-      name: packet.name,
-      sha256: packet.sha256,
-      chars: packet.chars,
-      bytes: packet.bytes,
-      state,
-    };
-  }
-
-  private claimedEnvironment(channel: TurnChannel): PendingTurn {
-    const skillReady = !channel.selectedSkill || channel.selectedSkill.state === "acknowledged";
-    return skillReady ? channel.environment : { ...channel.environment, tools: [] };
-  }
-
   private dispatch(request: BrokerRequest): unknown | Promise<unknown> {
     this.prune();
     if (request.method === "claim") {
@@ -569,8 +502,7 @@ export class TurnBroker {
         }
         return {
           bindingId: channel.bindingId,
-          environment: this.claimedEnvironment(channel),
-          ...(channel.selectedSkill ? { selectedSkill: this.selectedSkillSummary(channel) } : {}),
+          environment: channel.environment,
         };
       }
       this.pending.delete(token);
@@ -579,8 +511,7 @@ export class TurnBroker {
       this.bindings.set(bindingId, { token, channel });
       return {
         bindingId,
-        environment: this.claimedEnvironment(channel),
-        ...(channel.selectedSkill ? { selectedSkill: this.selectedSkillSummary(channel) } : {}),
+        environment: channel.environment,
       };
     }
 
@@ -601,32 +532,10 @@ export class TurnBroker {
       this.revoke(binding.token);
       return { released: true };
     }
-    if (request.method === "resolve") return { environment: this.claimedEnvironment(binding.channel) };
-
-    if (request.method === "load_skill") {
-      const selected = binding.channel.selectedSkill;
-      if (!selected) throw new Error("This Codex turn has no selected skill to load");
-      if (binding.channel.finalized) throw new Error("Codex turn is already finalized");
-      if (selected.state === "pending") selected.state = "loaded";
-      return loadedSelectedSkill(selected.packet);
-    }
-
-    if (request.method === "ack_skill") {
-      const selected = binding.channel.selectedSkill;
-      if (!selected) throw new Error("This Codex turn has no selected skill to acknowledge");
-      if (binding.channel.finalized) throw new Error("Codex turn is already finalized");
-      if (request.sha256 !== selected.packet.sha256) throw new Error("Selected skill hash does not match this turn");
-      if (selected.state === "pending") throw new Error("Selected skill must be loaded before acknowledgement");
-      selected.state = "acknowledged";
-      return { acknowledged: true, sha256: selected.packet.sha256 };
-    }
+    if (request.method === "resolve") return { environment: binding.channel.environment };
 
     if (request.method === "search_history" || request.method === "load_history") {
       if (binding.channel.finalized) throw new Error("Codex turn is already finalized");
-      if (binding.channel.selectedSkill?.state !== undefined
-        && binding.channel.selectedSkill.state !== "acknowledged") {
-        throw new Error("Selected skill must be loaded and acknowledged before native Codex actions");
-      }
       const history = binding.channel.collapsedHistory;
       if (!history || history.length === 0) throw new Error("This Codex turn has no collapsed history to recall");
       if (request.method === "search_history") {
@@ -646,10 +555,6 @@ export class TurnBroker {
     const wireName = request.wireName?.trim();
     if (!wireName) throw new Error("wire tool name is required");
     if (binding.channel.finalized) throw new Error("Codex turn is already finalized");
-    if (binding.channel.selectedSkill?.state !== undefined
-      && binding.channel.selectedSkill.state !== "acknowledged") {
-      throw new Error("Selected skill must be loaded and acknowledged before native Codex actions");
-    }
     const callId = opaqueId("call");
     const toolRequest: BrokerToolRequest = {
       callId,

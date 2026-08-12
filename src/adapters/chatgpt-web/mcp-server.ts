@@ -4,22 +4,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import * as z from "zod/v4";
 import { namespacedToolName, type CodexTool } from "../../types";
 import type { ChatGptTurnEnvironment } from "./environment";
-import {
-  SELECTED_SKILL_ACK_WIRE_NAME,
-  SELECTED_SKILL_LOAD_WIRE_NAME,
-  type LoadedSelectedSkill,
-} from "./selected-skill";
 import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "./history-recall";
 import {
   callTurnBroker,
-  type BrokerSelectedSkillSummary,
   type BrokerToolResult,
 } from "./turn-broker";
 
 interface ClaimedTurn {
   bindingId: string;
   environment: ChatGptTurnEnvironment & { expiresAt?: number };
-  selectedSkill?: BrokerSelectedSkillSummary;
 }
 
 const turnTokenSchema = z.string().min(20).max(256);
@@ -61,38 +54,6 @@ function result(value: Record<string, unknown>, isError = false) {
     structuredContent: value,
     ...(isError ? { isError: true } : {}),
   };
-}
-
-function requireSelectedSkillAcknowledged(claimed: ClaimedTurn): void {
-  if (claimed.selectedSkill && claimed.selectedSkill.state !== "acknowledged") {
-    throw new Error("Selected skill must be loaded and acknowledged before native Codex actions");
-  }
-}
-
-function selectedSkillInventory() {
-  return [
-    {
-      wire_name: SELECTED_SKILL_LOAD_WIRE_NAME,
-      name: SELECTED_SKILL_LOAD_WIRE_NAME,
-      namespace: null,
-      description: "Load the exact skill explicitly selected by the user for this Codex turn.",
-      kind: "function",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
-    },
-    {
-      wire_name: SELECTED_SKILL_ACK_WIRE_NAME,
-      name: SELECTED_SKILL_ACK_WIRE_NAME,
-      namespace: null,
-      description: "Acknowledge the exact SHA-256 returned by the selected-skill loader.",
-      kind: "function",
-      parameters: {
-        type: "object",
-        properties: { sha256: { type: "string", minLength: 64, maxLength: 64 } },
-        required: ["sha256"],
-        additionalProperties: false,
-      },
-    },
-  ];
 }
 
 function wireName(tool: CodexTool): string {
@@ -245,9 +206,7 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ turn_token, cmd, workdir, yield_time_ms, max_output_tokens, tty }, extra) => {
-      const claimed = await claimTurn("codex_exec", turn_token, extra);
-      requireSelectedSkillAcknowledged(claimed);
-      const bound = claimed.environment;
+      const claimed = await claimTurn("codex_exec", turn_token, extra);      const bound = claimed.environment;
       const execCommandArguments = {
         cmd,
         ...(workdir ? { workdir } : {}),
@@ -290,9 +249,7 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ turn_token, session_id, chars, yield_time_ms, max_output_tokens }, extra) => {
-      const claimed = await claimTurn("codex_write_stdin", turn_token, extra);
-      requireSelectedSkillAcknowledged(claimed);
-      const bound = claimed.environment;
+      const claimed = await claimTurn("codex_write_stdin", turn_token, extra);      const bound = claimed.environment;
       const tool = exactTool(bound, "write_stdin");
       const payload = { arguments: {
         session_id,
@@ -315,9 +272,7 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
     async ({ turn_token, patch }, extra) => {
-      const claimed = await claimTurn("codex_apply_patch", turn_token, extra);
-      requireSelectedSkillAcknowledged(claimed);
-      const bound = claimed.environment;
+      const claimed = await claimTurn("codex_apply_patch", turn_token, extra);      const bound = claimed.environment;
       const tool = exactTool(bound, "apply_patch");
       if (!tool) return invokeNestedNative(claimed.bindingId, bound, "apply_patch", true, { input: patch });
       return tool.freeform
@@ -339,9 +294,7 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({ turn_token, path, detail }, extra) => {
-      const claimed = await claimTurn("codex_view_image", turn_token, extra);
-      requireSelectedSkillAcknowledged(claimed);
-      const bound = claimed.environment;
+      const claimed = await claimTurn("codex_view_image", turn_token, extra);      const bound = claimed.environment;
       const tool = exactTool(bound, "view_image");
       const payload = { arguments: { path, ...(detail ? { detail } : {}) } };
       return tool
@@ -366,10 +319,6 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
     },
     async ({ turn_token, query, offset, limit, include_schema }, extra) => {
       const claimed = await claimTurn("codex_tool_inventory", turn_token, extra);
-      if (claimed.selectedSkill && claimed.selectedSkill.state !== "acknowledged") {
-        const tools = selectedSkillInventory();
-        return result({ tools, total: tools.length, next_offset: null });
-      }
       const bound = claimed.environment;
       const needle = query?.trim().toLowerCase();
       const matches = bound.tools.filter(tool => !needle || [
@@ -409,33 +358,6 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
     },
     async ({ turn_token, wire_name, arguments: args, input }, extra) => {
       const claimed = await claimTurn("codex_tool_call", turn_token, extra);
-      if (wire_name === SELECTED_SKILL_LOAD_WIRE_NAME) {
-        if (!claimed.selectedSkill) throw new Error("This Codex turn has no selected skill to load");
-        if (input !== undefined || args && Object.keys(args).length > 0) {
-          throw new Error(`${SELECTED_SKILL_LOAD_WIRE_NAME} accepts no arguments`);
-        }
-        const loaded = await callTurnBroker<LoadedSelectedSkill>(options.brokerSocketPath, {
-          method: "load_skill",
-          bindingId: claimed.bindingId,
-        }, invocationTimeout(claimed.environment));
-        return result({ ...loaded });
-      }
-      if (wire_name === SELECTED_SKILL_ACK_WIRE_NAME) {
-        if (!claimed.selectedSkill) throw new Error("This Codex turn has no selected skill to acknowledge");
-        if (input !== undefined) throw new Error(`${SELECTED_SKILL_ACK_WIRE_NAME} does not accept freeform input`);
-        const keys = Object.keys(args ?? {});
-        const sha256 = args?.sha256;
-        if (keys.length !== 1 || typeof sha256 !== "string") {
-          throw new Error(`${SELECTED_SKILL_ACK_WIRE_NAME} requires only a sha256 argument`);
-        }
-        const acknowledged = await callTurnBroker<{ acknowledged: true; sha256: string }>(options.brokerSocketPath, {
-          method: "ack_skill",
-          bindingId: claimed.bindingId,
-          sha256,
-        }, invocationTimeout(claimed.environment));
-        return result(acknowledged);
-      }
-      requireSelectedSkillAcknowledged(claimed);
       if (wire_name === HISTORY_SEARCH_WIRE_NAME) {
         if (input !== undefined) throw new Error(`${HISTORY_SEARCH_WIRE_NAME} does not accept freeform input`);
         const query = args?.query;

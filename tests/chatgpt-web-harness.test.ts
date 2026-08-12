@@ -14,11 +14,6 @@ import { createChatGptWebAdapter } from "../src/adapters/chatgpt-web/index";
 import { chatGptHtmlToMarkdown, ChatGptMarkdownBuffer } from "../src/adapters/chatgpt-web/markdown";
 import { CHATGPT_WEB_LUNA_MODEL_ID, CHATGPT_WEB_MODEL_ID, resolveChatGptWebModelMode } from "../src/adapters/chatgpt-web/model";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt, withoutSupersededModelSwitchContracts } from "../src/adapters/chatgpt-web/prompt";
-import {
-  SELECTED_SKILL_ACK_WIRE_NAME,
-  SELECTED_SKILL_LOAD_WIRE_NAME,
-  type SelectedSkillPacket,
-} from "../src/adapters/chatgpt-web/selected-skill";
 import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "../src/adapters/chatgpt-web/history-recall";
 import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnSessions, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey } from "../src/adapters/chatgpt-web/turn-execution";
 import { callTurnBroker, TurnBroker, type BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
@@ -255,63 +250,6 @@ describe("ChatGPT outer-native harness v4", () => {
     expect(() => chatGptTurnExecutionKey(request)).not.toThrow();
   });
 
-  test("rejects browser completion when a selected skill was not loaded and acknowledged", async () => {
-    const socketPath = brokerTestEndpoint(`cgw-h4-skill-finalize-${process.pid}-${Date.now()}`);
-    const provider: CodexProviderConfig = {
-      adapter: "chatgpt-web",
-      baseUrl: `browser://chatgpt-selected-skill-finalize-${Date.now()}`,
-      chatgptWeb: {
-        brokerSocketPath: socketPath,
-        localToolsEnabled: true,
-        solAvailable: true,
-        proAvailable: true,
-      },
-    };
-    const worker = ChatGptBrowserWorker.forProvider(provider);
-    const originalRun = worker.run.bind(worker);
-    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
-      const prepared = await turn.prepare();
-      expect(prepared.text).toContain(SELECTED_SKILL_LOAD_WIRE_NAME);
-      expect(prepared.text).not.toContain("SKILL-MUST-BE-LOADED");
-      const answer = "unsafe bypass answer";
-      turn.onTextDelta(answer);
-      return answer;
-    };
-    const request = canonicalCurrentWireRequest(environmentXml);
-    const rawBody = request._rawBody as {
-      client_metadata: Record<string, unknown>;
-      input: Array<Record<string, unknown>>;
-    };
-    const metadata = JSON.parse(rawBody.client_metadata["x-codex-turn-metadata"] as string) as Record<string, unknown>;
-    metadata.workspaces = { [tempRoot]: { has_changes: false } };
-    rawBody.client_metadata["x-codex-turn-metadata"] = JSON.stringify(metadata);
-    const skillEnvelope = "<skill name=\"ck:ask\">SKILL-MUST-BE-LOADED</skill>";
-    request.context.messages.push({ role: "user", content: skillEnvelope, timestamp: 3 });
-    rawBody.input.push({
-      type: "message",
-      id: "msg_selected_skill",
-      role: "user",
-      content: [{ type: "input_text", text: skillEnvelope }],
-    });
-    const events: AdapterEvent[] = [];
-
-    try {
-      await createChatGptWebAdapter(provider).runTurn!(
-        request,
-        { headers: new Headers() },
-        event => events.push(event),
-      );
-      const failure = events.find(event => event.type === "error");
-      expect(failure).toMatchObject({ type: "error", retryable: true });
-      expect(failure && "message" in failure ? failure.message : "").toContain("must be loaded and acknowledged");
-      expect(failure && "message" in failure ? failure.message : "").toContain("\"ck:ask\"");
-      expect(events.some(event => event.type === "text_delta")).toBe(false);
-      expect(events.some(event => event.type === "done" && event.endTurn)).toBe(false);
-    } finally {
-      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
-      await TurnBroker.forSocket(socketPath).close();
-    }
-  });
 
   test("rejects canonical environment and user revision when an item conflicts with the current turn", () => {
     const request = canonicalCurrentWireRequest(environmentXml);
@@ -1668,86 +1606,6 @@ describe("ChatGPT outer-native harness v4", () => {
     }
   });
 
-  test("gates a multimodal selected skill and replays an empty acknowledged final", async () => {
-    const socketPath = brokerTestEndpoint(`cgw-h3-selected-empty-${process.pid}-${Date.now()}`);
-    const provider: CodexProviderConfig = {
-      adapter: "chatgpt-web",
-      baseUrl: "browser://chatgpt-selected-empty",
-      chatgptWeb: { brokerSocketPath: socketPath, turnTimeoutMs: 30_000, localToolsEnabled: true, solAvailable: true, proAvailable: true },
-    };
-    const worker = ChatGptBrowserWorker.forProvider(provider);
-    const originalRun = worker.run.bind(worker);
-    let browserStarts = 0;
-    (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = async turn => {
-      browserStarts += 1;
-      const prepared = await turn.prepare();
-      try {
-        const token = prepared.text.match(/turn_token (turn_[A-Za-z0-9_-]+)/)?.[1];
-        if (!token) throw new Error("turn token missing from selected-skill prompt");
-        const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
-        await expect(callTurnBroker(socketPath, {
-          method: "invoke",
-          bindingId: claimed.bindingId,
-          wireName: "exec_command",
-          arguments: { command: "pwd" },
-        })).rejects.toThrow("must be loaded and acknowledged");
-        const loaded = await callTurnBroker<{ sha256: string; content: string }>(socketPath, {
-          method: "load_skill",
-          bindingId: claimed.bindingId,
-        });
-        expect(loaded.content).toContain("Use source evidence");
-        await callTurnBroker(socketPath, {
-          method: "ack_skill",
-          bindingId: claimed.bindingId,
-          sha256: loaded.sha256,
-        });
-        return "";
-      } finally {
-        prepared.release();
-      }
-    };
-
-    const adapter = createChatGptWebAdapter(provider);
-    const request = rawWireRequest(environmentXml);
-    const imageUrl = "data:image/png;base64,iVBORw0KGgo=";
-    request.context.messages[0]!.content = [
-      { type: "text", text: "Inspect the project image" },
-      { type: "image", imageUrl },
-    ];
-    const skillEnvelope = "<skill name=\"ck:ask\"># ck:ask\nUse source evidence.\n</skill>";
-    request.context.messages.push({ role: "user", content: skillEnvelope, timestamp: 3 });
-    const raw = request._rawBody as { client_metadata: Record<string, unknown>; input: Array<Record<string, unknown>> };
-    raw.client_metadata["x-codex-turn-metadata"] = JSON.stringify({
-      thread_id: "thread_test_123",
-      turn_id: "turn_test_123",
-      sandbox: "none",
-      workspaces: { [tempRoot]: {} },
-    });
-    raw.input[1]!.content = [
-      { type: "input_text", text: "Inspect the project image" },
-      { type: "input_image", image_url: imageUrl },
-    ];
-    raw.input.push({
-      type: "message",
-      role: "user",
-      content: [{ type: "input_text", text: skillEnvelope }],
-      internal_chat_message_metadata_passthrough: { turn_id: "turn_test_123" },
-    });
-
-    try {
-      const first: AdapterEvent[] = [];
-      await adapter.runTurn!(request, { headers: new Headers() }, event => first.push(event));
-      expect(first.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
-
-      const replay: AdapterEvent[] = [];
-      await adapter.runTurn!(request, { headers: new Headers() }, event => replay.push(event));
-      expect(browserStarts).toBe(1);
-      expect(replay.at(-1)).toMatchObject({ type: "done", stopReason: "stop", endTurn: true });
-    } finally {
-      (worker as unknown as { run: (turn: BrowserTurn) => Promise<string> }).run = originalRun;
-      await TurnBroker.forSocket(socketPath).close();
-    }
-  });
 
   test("runs Pro as one context-complete read-only browser turn with native warning, tracing, and exact replay", async () => {
     const socketPath = brokerTestEndpoint(`cgw-h3-pro-${process.pid}-${Date.now()}`);
@@ -2016,90 +1874,6 @@ describe("ChatGPT outer-native harness v4", () => {
     }
   }, 30_000);
 
-  test("intercepts selected-skill load and ack before exposing native MCP actions", async () => {
-    const socketPath = brokerTestEndpoint(`cgw-h4-mcp-skill-${process.pid}-${Date.now()}`);
-    const broker = TurnBroker.forSocket(socketPath);
-    const skill: SelectedSkillPacket = {
-      name: "ck:ask",
-      content: "# ck:ask\nUse source evidence.\n",
-      sourceText: "<skill name=\"ck:ask\"># ck:ask\nUse source evidence.\n</skill>",
-      sourceMessageIndex: 0,
-      chars: 30,
-      bytes: 30,
-      sha256: "d".repeat(64),
-    };
-    const selectedEnvironment = extractChatGptTurnEnvironment(parsed(environmentXml));
-    selectedEnvironment.tools = [
-      { name: "exec_command", description: "Run a command", parameters: { type: "object" } },
-    ];
-    const token = await broker.register(selectedEnvironment, 60_000, "selected-skill", skill);
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: ["src/cli.ts", "mcp", "--broker-socket", socketPath],
-      cwd: process.cwd(),
-      stderr: "pipe",
-    });
-    const client = new Client({ name: "codex-chatgpt-web-selected-skill-test", version: "1.0.0" });
-    const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args });
-
-    try {
-      await client.connect(transport);
-      const lockedInventory = await call("codex_tool_inventory", { turn_token: token });
-      expect(lockedInventory.structuredContent).toMatchObject({
-        total: 2,
-        tools: [
-          { wire_name: SELECTED_SKILL_LOAD_WIRE_NAME },
-          { wire_name: SELECTED_SKILL_ACK_WIRE_NAME },
-        ],
-      });
-      const blocked = await call("codex_exec", { turn_token: token, cmd: "pwd", workdir: tempRoot });
-      expect(blocked.isError).toBe(true);
-      expect(JSON.stringify(blocked.content)).toContain("must be loaded and acknowledged");
-
-      const loaded = await call("codex_tool_call", {
-        turn_token: token,
-        wire_name: SELECTED_SKILL_LOAD_WIRE_NAME,
-        arguments: {},
-      });
-      expect(loaded.structuredContent).toMatchObject({
-        kind: "user_selected_skill",
-        name: skill.name,
-        content: skill.content,
-        sha256: skill.sha256,
-      });
-      expect(JSON.stringify(loaded)).not.toContain("sourceText");
-
-      const wrongAck = await call("codex_tool_call", {
-        turn_token: token,
-        wire_name: SELECTED_SKILL_ACK_WIRE_NAME,
-        arguments: { sha256: "0".repeat(64) },
-      });
-      expect(wrongAck.isError).toBe(true);
-      expect(JSON.stringify(wrongAck.content)).toContain("hash does not match");
-
-      const ack = await call("codex_tool_call", {
-        turn_token: token,
-        wire_name: SELECTED_SKILL_ACK_WIRE_NAME,
-        arguments: { sha256: skill.sha256 },
-      });
-      expect(ack.structuredContent).toEqual({ acknowledged: true, sha256: skill.sha256 });
-
-      const unlockedInventory = await call("codex_tool_inventory", { turn_token: token });
-      expect(unlockedInventory.structuredContent).toMatchObject({
-        total: 1,
-        tools: [{ wire_name: "exec_command" }],
-      });
-      const exec = call("codex_exec", { turn_token: token, cmd: "pwd", workdir: tempRoot });
-      const [request] = await broker.nextToolBatch(token);
-      expect(request).toMatchObject({ wireName: "exec_command" });
-      broker.completeTool(token, request!.callId, toolResult({ output: tempRoot, exit_code: 0 }));
-      await expect(exec).resolves.toMatchObject({ structuredContent: { output: tempRoot, exit_code: 0 } });
-    } finally {
-      await client.close().catch(() => {});
-      broker.revoke(token);
-      await broker.close();
-    }
-  }, 30_000);
 
   test("serves collapsed history recall over MCP stdio without a public schema change", async () => {
     const socketPath = brokerTestEndpoint(`cgw-h4-mcp-history-${process.pid}-${Date.now()}`);

@@ -16,11 +16,6 @@ import {
   HISTORY_SEARCH_WIRE_NAME,
   type RemovedHistoryMessage,
 } from "./history-recall";
-import {
-  selectedSkillReference,
-  withoutSelectedSkillMessage,
-  type SelectedSkillPacket,
-} from "./selected-skill";
 
 /**
  * ClaudeKit-style instruction bundles concatenate independent rule files as
@@ -513,88 +508,6 @@ export function splitLunaPreamble(
   };
 }
 
-export interface LunaSkillPreambleDelivery {
-  compiled: CompiledChatGptWebPrompt;
-  messages: readonly CodexMessage[];
-  estimatedTotalTokens: number;
-  preloadParts: number;
-}
-
-/**
- * Relocate an explicitly invoked skill body out of the final message and into the last preload
- * part(s), so an over-budget plain-Luna turn can offload the skill without the MCP broker. The final
- * message keeps only a compact reference plus the "delivered in an earlier message" contract
- * (rendered by passing `preambleSkill` to the inner compiles). Returns undefined — leaving the skill
- * inline for the caller's collapse fallback — when the strip cannot be verified or the part budget
- * (history parts + skill parts) exceeds `maxParts`.
- */
-export function deliverSkillAsPreamble(
-  working: CodexParsedRequest,
-  packet: SelectedSkillPacket,
-  capabilities: ChatGptWebCapabilities,
-  turnToken: string | undefined,
-  options: CompileChatGptWebPromptOptions | undefined,
-  budgetTokens: number,
-  modelId: string,
-  maxParts: number,
-): LunaSkillPreambleDelivery | undefined {
-  const skillMessage = working.context.messages[packet.sourceMessageIndex];
-  if (!skillMessage) return undefined;
-  let stripped: CodexParsedRequest;
-  try {
-    stripped = withoutSelectedSkillMessage(working, packet);
-  } catch {
-    return undefined; // index/text drifted; keep the skill inline and let collapse handle the turn
-  }
-
-  // The inner compiles exclude the body but carry the reference + earlier-message contract.
-  const refOptions: CompileChatGptWebPromptOptions = {
-    ...options,
-    selectedSkill: undefined,
-    preambleSkill: selectedSkillReference(packet),
-    preambleSkillCandidate: undefined,
-  };
-  const compileRef = (subset: readonly CodexMessage[]): CompiledChatGptWebPrompt =>
-    compileChatGptWebPrompt(
-      { ...stripped, context: { ...stripped.context, messages: [...subset] } },
-      capabilities,
-      turnToken,
-      refOptions,
-    );
-
-  const skillParts = chunkMessagesIntoPreamble([skillMessage], budgetTokens, modelId);
-  if (skillParts.length === 0 || skillParts.length > maxParts) return undefined;
-  const skillPartsTokens = skillParts.reduce((sum, part) => sum + estimateTokens(part, modelId), 0);
-
-  const strippedMessages = stripped.context.messages;
-  const finalOnly = compileRef(strippedMessages);
-  const finalOnlyTokens = estimateCompiledChatGptWebInputTokens(finalOnly, modelId);
-  if (finalOnlyTokens <= budgetTokens) {
-    // Removing the skill body already brought the remaining turn under budget; the history stays
-    // inline in the final message and the skill rides as the only preamble span.
-    return {
-      compiled: { ...finalOnly, preamble: skillParts },
-      messages: strippedMessages,
-      estimatedTotalTokens: finalOnlyTokens + skillPartsTokens,
-      preloadParts: skillParts.length,
-    };
-  }
-
-  // History still overflows without the skill: peel it too, reserving slots for the skill parts so
-  // the combined preamble never exceeds the cap.
-  const historyMax = maxParts - skillParts.length;
-  if (historyMax < 1) return undefined;
-  const split = splitLunaPreamble(strippedMessages, compileRef, budgetTokens, modelId, historyMax);
-  if (!split) return undefined;
-  const preamble = [...split.preamble, ...skillParts];
-  return {
-    compiled: { ...split.finalCompiled, preamble },
-    messages: split.finalMessages,
-    estimatedTotalTokens: split.estimatedTotalTokens + skillPartsTokens,
-    preloadParts: preamble.length,
-  };
-}
-
 export interface LunaBudgetedCompilation {
   compiled: CompiledChatGptWebPrompt;
   /** The message list the compiled prompt was built from (post-slimming). */
@@ -680,30 +593,6 @@ export function compileLunaBudgetedPrompt(
   // sections, deliver the older span as ordered earlier-context messages instead of collapsing it
   // into a lossy summary. Falls through to collapse when preload cannot fit the irreducible core.
   if (result.estimatedTokens > budget && lunaPreloadEnabled() && options?.disablePreload !== true) {
-    // A skill invoked without the MCP loader (no danger-full-access) rides as the last preamble
-    // part(s) so its body stops counting against the final chunk. Declines (keeps the skill inline)
-    // when the strip cannot be verified or the part cap would be exceeded.
-    const skillCandidate = options?.preambleSkillCandidate;
-    if (skillCandidate) {
-      const delivered = deliverSkillAsPreamble(
-        working,
-        skillCandidate,
-        capabilities,
-        turnToken,
-        options,
-        budget,
-        parsed.modelId,
-        lunaPreloadMaxParts(),
-      );
-      if (delivered) {
-        result.compiled = delivered.compiled;
-        result.estimatedTokens = delivered.estimatedTotalTokens;
-        result.messages = delivered.messages;
-        result.slimmed = true;
-        result.preloadParts = delivered.preloadParts;
-        return result;
-      }
-    }
     const split = splitLunaPreamble(
       working.context.messages,
       subset => compileWith(withMessages(subset)),

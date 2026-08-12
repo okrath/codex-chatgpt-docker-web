@@ -61,10 +61,6 @@ from this project's side. What it means in practice:
   freshly-read file must all fit within ~28k even after slimming. Full mode's tool contract
   makes each turn heavier, so headroom for your own content is smaller than in browser-only
   mode.
-- An explicitly selected existing skill can be moved out of that one browser message, but
-  the system prompt, history, current task, tool contract, and newly read files still count
-  toward the limit. For example, `$ck:ask abc xyz` may offload the selected skill body,
-  while the human task `abc xyz` stays inline.
 - If a turn still overflows after slimming, reduce it (trim `~/.codex/AGENTS.md`, start a
   fresh/short thread, work on fewer or smaller files at a time) or use a paid ChatGPT tier,
   whose web transport budget is substantially larger and unlocks
@@ -188,14 +184,6 @@ preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3); a turn that would nee
 back to collapse. If a preload delivery fails mid-way, the turn is re-delivered once as a single
 slimmed message, so preload is never worse than collapse.
 
-An explicitly invoked skill body can be one of those preload parts. When a turn invokes a skill and
-runs over budget without the Full-mode MCP loader (see below), the bridge moves the skill body into
-the **last** preload part instead of leaving it inline where it would blow the budget — the final
-message keeps only a compact reference and a "the skill body was delivered in an earlier message"
-instruction. The skill part counts toward `LUNA_PRELOAD_MAX_PARTS`; if it plus the history parts
-would exceed the cap, the skill stays inline and the turn falls back to collapse. This needs no
-Developer Mode, connector, or `danger-full-access` — it works on a plain Luna chat.
-
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):
@@ -223,11 +211,6 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   (only in the copy sent to the browser — files on disk and native-model Codex usage are
   never touched). Full mechanism and trade-offs:
   [How Luna context slimming keeps long threads alive](#how-luna-context-slimming-keeps-long-threads-alive).
-- **Selected skill loader in Full mode.** When the outer Codex turn is `danger-full-access`,
-  an explicitly invoked existing skill can be moved out of the cloned browser message and
-  into turn-scoped broker RAM. The browser gets only a compact name/size/SHA-256
-  reference; it does not gain tools, workspace roots, sandbox scope, approval policy, or
-  connector permissions.
 
 Most other upstream bridge behavior — selectors, streaming, compaction, model catalog, and
 security checks — remains unchanged unless noted above.
@@ -415,65 +398,6 @@ tunnel takes ~15–30 seconds to come up after a container restart, so an immedi
 may briefly report "Tunnel runtime is not ready" — run it again. A healthy full-mode doctor
 ends with `✓ Tunnel runtime reports healthy and ready`; the remaining connector notice is
 informational (local checks cannot see ChatGPT settings).
-
-### Selected skill offload
-
-When a turn explicitly invokes a skill, the bridge keeps the human task inline but moves the (often
-large) skill body out of the single browser message. There are two delivery modes; the bridge picks
-one automatically:
-
-- **MCP loader (Full + `danger-full-access`).** The body is served over the Codex Native broker and
-  gated by a SHA-256 acknowledgement (prerequisites and flow below). Strongest guarantee; preferred
-  when available.
-- **Preamble delivery (plain Luna, over budget).** When the MCP loader is unavailable, an
-  over-budget Luna turn delivers the skill body as the last multi-message preload part instead (see
-  *Multi-message preload* above). No Developer Mode, connector, or `danger-full-access` required — it
-  works on a plain Free-tier chat. A turn that fits inline keeps the skill inline unchanged.
-
-#### MCP loader in Full mode
-
-Prerequisites:
-
-- Full local-tools mode
-- The outer Codex turn is `danger-full-access`
-- ChatGPT Developer Mode is on and the connector reads `Codex Native2 — Connected · Allow all`
-
-Flow:
-
-1. Codex injects an explicitly invoked existing skill as the final
-   `<skill name="...">...</skill>` item.
-2. The bridge removes that skill body from the cloned browser message, stores it in
-   turn-scoped broker RAM, and sends the browser only a compact name/size/SHA-256 reference.
-3. The browser uses the existing `codex_tool_call` path to load the exact UTF-8 bytes and
-   must acknowledge the same hash before native actions unlock or completion is accepted.
-4. Before that ack, native inventory and actions stay locked. A malformed or untrusted
-   envelope retains the normal inline behavior; multiple selected skills or a packet above
-   the 5,000,000-byte broker limit fail the turn explicitly.
-
-Example:
-
-- `$ck:ask abc xyz` selects the existing `ck:ask` skill. The browser may receive that skill
-  offloaded, while the human task text `abc xyz` stays inline.
-
-Boundaries:
-
-- Browser-only mode keeps the existing inline behavior.
-- Pro read-only mode keeps the existing inline behavior.
-- Skill loading is instructions-only; it does not expand tools, workspace roots, sandboxing, approval policy, or connector permissions.
-- State disappears on revoke.
-- If ChatGPT answers without completing the load/acknowledge handshake, the bridge fails that
-  turn explicitly (the unverified answer is withheld) and reports a retryable error naming the
-  skill. Retrying starts a fresh browser turn; running the task without the skill invocation
-  falls back to plain inline behavior.
-
-> **Free accounts work.** Developer mode and custom Tunnel connectors are available on the
-> free ChatGPT tier (verified: a free account created and connected `Codex Native2` with
-> Allow all actions). If the connector does not appear in the `@` menu right after you
-> create it, reopen the chat — it syncs within a few seconds. The error
-> `connector menu opened but exposed no row named "Codex Native2"` simply means the
-> connector was not created yet (or not named exactly `Codex Native2`).
-
-To go back: `setup --browser-only --acknowledge-unofficial` and restart the container.
 
 ## Limitations
 - **No passkeys.** Use password or email-code sign-in.

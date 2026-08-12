@@ -1,6 +1,11 @@
 # Full-access selected-skill loader
 
-Status: complete
+Status: reverted 2026-08-12 — removed from the codebase together with A4
+(`plans/2026-08-12-skill-preamble-unification`). The MCP selected-skill loader depends on Codex
+injecting a `<skill name="X">…</skill>` tail, which the deployed Codex Desktop (0.147-alpha) does not
+emit on any sandbox (verified across 543 rollouts + live bridge logs + account alignment). The
+"live smoke" recorded below was never reproducible with real Codex output and left no retained
+evidence. Skills work via Codex's catalog + on-demand `SKILL.md` read. Plan kept for history.
 
 ## Objective
 

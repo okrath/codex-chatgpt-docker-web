@@ -20,13 +20,7 @@ import {
   type CompileChatGptWebPromptOptions,
   type CompiledChatGptWebPrompt,
 } from "./prompt";
-import {
-  extractSelectedSkillPacket,
-  identifySelectedSkillPacket,
-  selectedSkillReference,
-  withoutSelectedSkillMessage,
-} from "./selected-skill";
-import { ChatGptTurnFinalizationError, TurnBroker, type BrokerToolRequest, type BrokerToolResult } from "./turn-broker";
+import { TurnBroker, type BrokerToolRequest, type BrokerToolResult } from "./turn-broker";
 import { ChatGptTextFeed, ChatGptTraceFeed, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey, chatGptTurnSessions, type ChatGptBrowserOutcome, type ChatGptTraceEvent, type ChatGptTurnRuntime, type ChatGptTurnSession } from "./turn-execution";
 import { estimateChatGptWebInputTokens, estimateChatGptWebUsage } from "./usage";
 import { ChatGptThreadEnvironmentStore } from "./thread-environment";
@@ -238,28 +232,9 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         },
       }
       : checkpointInput.parsed;
-    const selectedSkill = mode.localTools && environment
-      ? extractSelectedSkillPacket(canonicalToolInput, environment)
-      : undefined;
-    // Preamble-delivered skill: when the MCP loader is unavailable (no danger-full-access), a Luna
-    // turn can still offload an invoked skill by relocating its body into a preload part. Detected
-    // here; the budget pipeline relocates it only when the turn is over budget. Ambiguity or an
-    // oversized body leaves the skill inline (identify returns undefined / a rare throw is ignored).
-    let preambleSkillPacket: ReturnType<typeof identifySelectedSkillPacket>;
-    if (!selectedSkill && parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID && !parsed._compactionRequest) {
-      try {
-        preambleSkillPacket = identifySelectedSkillPacket(canonicalToolInput);
-      } catch {
-        preambleSkillPacket = undefined;
-      }
-    }
-    const promptInput = selectedSkill
-      ? withoutSelectedSkillMessage(canonicalToolInput, selectedSkill)
-      : canonicalToolInput;
+    const promptInput = canonicalToolInput;
     const promptOptions: CompileChatGptWebPromptOptions = {
       captureLunaCheckpoint,
-      ...(selectedSkill ? { selectedSkill: selectedSkillReference(selectedSkill) } : {}),
-      ...(preambleSkillPacket ? { preambleSkillCandidate: preambleSkillPacket } : {}),
       ...(disablePreload ? { disablePreload: true } : {}),
     };
     let compiledPromptTokens: number | undefined;
@@ -287,10 +262,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
             },
           }
           : currentCheckpointInput;
-        const currentSelectedSkillInput = selectedSkill
-          ? withoutSelectedSkillMessage(currentCanonicalInput, selectedSkill)
-          : currentCanonicalInput;
-        return estimateChatGptWebInputTokens(currentSelectedSkillInput, turnCapabilities, promptOptions);
+        return estimateChatGptWebInputTokens(currentCanonicalInput, turnCapabilities, promptOptions);
       } catch (error) {
         console.warn(
           "[chatgpt-web] input token estimate fell back to the compiled turn prompt: "
@@ -384,7 +356,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         trace,
         text,
         inputTokensFor,
-        holdBrowserTextUntilFinalized: false,
         cancel: () => browserAbort.abort(),
       };
     }
@@ -402,7 +373,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
           environment,
           timeoutMs === undefined ? undefined : timeoutMs + 60_000,
           traceId,
-          selectedSkill,
         );
         activeToken = turnToken;
         tokenSettled = true;
@@ -444,7 +414,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
       trace,
       text,
       inputTokensFor,
-      holdBrowserTextUntilFinalized: selectedSkill !== undefined,
       cancel: () => {
         browserAbort.abort();
         if (activeToken) broker.revoke(activeToken);
@@ -452,28 +421,8 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     };
   };
 
-  /**
-   * The bridge cannot force the browser model to honor the loader contract; it can only refuse
-   * the completion. Surface that refusal as a structured retryable error with guidance instead
-   * of a bare broker failure — a fresh browser attempt usually complies.
-   */
   const finalizeBrowserTurn = (turnToken: string): void => {
-    try {
-      broker.finalize(turnToken);
-    } catch (error) {
-      if (error instanceof ChatGptTurnFinalizationError) {
-        const guidance = error.reason === "skill_unacknowledged"
-          ? "ChatGPT answered without loading the user-selected skill, so the unverified answer was withheld. Retry the turn; if ChatGPT keeps skipping the loader, run the task without the skill invocation."
-          : "ChatGPT produced its final answer while a native Codex action was still in flight. Retry the turn.";
-        throw new ChatGptWebAdapterError(`${error.message}. ${guidance}`, {
-          status: 502,
-          errorType: "server_error",
-          code: "upstream_server_error",
-          retryable: true,
-        });
-      }
-      throw error;
-    }
+    broker.finalize(turnToken);
   };
 
   return {
@@ -539,10 +488,7 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
               const trace = session.runtime.trace.drain();
               reasoning = trace.map(event => event.text);
               emitTraceEvents(trace, emitCaptured);
-              const finalTextDeltas = session.runtime.holdBrowserTextUntilFinalized
-                ? [...session.drainHeldBrowserText(), ...session.runtime.text.drain()]
-                : session.runtime.text.drain();
-              emitTextDeltas(finalTextDeltas, emitCaptured);
+              emitTextDeltas(session.runtime.text.drain(), emitCaptured);
               if (session.runtime.text.value() !== settled.answer) {
                 throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
               }
@@ -607,10 +553,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
               emitTraceEvents(trace, emitRound);
             };
             const emitNewText = (deltas: string[]) => {
-              if (session.runtime.holdBrowserTextUntilFinalized) {
-                session.holdBrowserText(deltas);
-                return;
-              }
               emitTextDeltas(deltas, emitRound);
             };
             if (!parsed._compactionRequest) emitProContextWarning(parsed, turnCapabilities, emitRound);
@@ -649,9 +591,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
                 if (turnToken) finalizeBrowserTurn(turnToken);
                 if (session.runtime.text.value() !== next.outcome.answer) {
                   throw new Error("ChatGPT browser Markdown stream did not reproduce the completed answer");
-                }
-                if (session.runtime.holdBrowserTextUntilFinalized) {
-                  emitTextDeltas(session.drainHeldBrowserText(), emitRound);
                 }
                 session.setFinalReasoning(roundReasoning);
                 session.setFinalEvents(roundEvents);
