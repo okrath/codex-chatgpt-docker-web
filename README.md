@@ -188,6 +188,14 @@ preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3); a turn that would nee
 back to collapse. If a preload delivery fails mid-way, the turn is re-delivered once as a single
 slimmed message, so preload is never worse than collapse.
 
+An explicitly invoked skill body can be one of those preload parts. When a turn invokes a skill and
+runs over budget without the Full-mode MCP loader (see below), the bridge moves the skill body into
+the **last** preload part instead of leaving it inline where it would blow the budget — the final
+message keeps only a compact reference and a "the skill body was delivered in an earlier message"
+instruction. The skill part counts toward `LUNA_PRELOAD_MAX_PARTS`; if it plus the history parts
+would exceed the cap, the skill stays inline and the turn falls back to collapse. This needs no
+Developer Mode, connector, or `danger-full-access` — it works on a plain Luna chat.
+
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):
@@ -408,7 +416,21 @@ may briefly report "Tunnel runtime is not ready" — run it again. A healthy ful
 ends with `✓ Tunnel runtime reports healthy and ready`; the remaining connector notice is
 informational (local checks cannot see ChatGPT settings).
 
-### Selected skill loader in Full mode
+### Selected skill offload
+
+When a turn explicitly invokes a skill, the bridge keeps the human task inline but moves the (often
+large) skill body out of the single browser message. There are two delivery modes; the bridge picks
+one automatically:
+
+- **MCP loader (Full + `danger-full-access`).** The body is served over the Codex Native broker and
+  gated by a SHA-256 acknowledgement (prerequisites and flow below). Strongest guarantee; preferred
+  when available.
+- **Preamble delivery (plain Luna, over budget).** When the MCP loader is unavailable, an
+  over-budget Luna turn delivers the skill body as the last multi-message preload part instead (see
+  *Multi-message preload* above). No Developer Mode, connector, or `danger-full-access` required — it
+  works on a plain Free-tier chat. A turn that fits inline keeps the skill inline unchanged.
+
+#### MCP loader in Full mode
 
 Prerequisites:
 

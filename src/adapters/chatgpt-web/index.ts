@@ -22,6 +22,7 @@ import {
 } from "./prompt";
 import {
   extractSelectedSkillPacket,
+  identifySelectedSkillPacket,
   selectedSkillReference,
   withoutSelectedSkillMessage,
 } from "./selected-skill";
@@ -240,12 +241,25 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const selectedSkill = mode.localTools && environment
       ? extractSelectedSkillPacket(canonicalToolInput, environment)
       : undefined;
+    // Preamble-delivered skill: when the MCP loader is unavailable (no danger-full-access), a Luna
+    // turn can still offload an invoked skill by relocating its body into a preload part. Detected
+    // here; the budget pipeline relocates it only when the turn is over budget. Ambiguity or an
+    // oversized body leaves the skill inline (identify returns undefined / a rare throw is ignored).
+    let preambleSkillPacket: ReturnType<typeof identifySelectedSkillPacket>;
+    if (!selectedSkill && parsed.modelId === CHATGPT_WEB_LUNA_MODEL_ID && !parsed._compactionRequest) {
+      try {
+        preambleSkillPacket = identifySelectedSkillPacket(canonicalToolInput);
+      } catch {
+        preambleSkillPacket = undefined;
+      }
+    }
     const promptInput = selectedSkill
       ? withoutSelectedSkillMessage(canonicalToolInput, selectedSkill)
       : canonicalToolInput;
     const promptOptions: CompileChatGptWebPromptOptions = {
       captureLunaCheckpoint,
       ...(selectedSkill ? { selectedSkill: selectedSkillReference(selectedSkill) } : {}),
+      ...(preambleSkillPacket ? { preambleSkillCandidate: preambleSkillPacket } : {}),
       ...(disablePreload ? { disablePreload: true } : {}),
     };
     let compiledPromptTokens: number | undefined;

@@ -95,14 +95,18 @@ function packetOf(
 }
 
 /**
- * Extract one Codex-generated skill tail. A typed `<skill>` inside the human's real message cannot
- * satisfy the separate final-item shape, and an ambiguous multi-skill tail fails closed.
+ * Identify and validate one Codex-generated skill tail, independent of sandbox authorization. A
+ * typed `<skill>` inside the human's real message cannot satisfy the separate final-item shape.
+ *
+ * `strictSingle` selects the multi-skill response: the MCP loader (fail-closed) throws on an
+ * ambiguous tail, while the preamble delivery path treats ambiguity as "no offloadable skill"
+ * (undefined) so a plain Luna turn is never failed by skill detection.
  */
-export function extractSelectedSkillPacket(
+export function identifySelectedSkillPacket(
   parsed: CodexParsedRequest,
-  environment: ChatGptTurnEnvironment,
+  opts?: { strictSingle?: boolean },
 ): SelectedSkillPacket | undefined {
-  if (environment.sandboxPolicy.type !== "dangerFullAccess" || parsed._compactionRequest) return undefined;
+  if (parsed._compactionRequest) return undefined;
   const turnId = extractChatGptTurnIdentity(parsed).turnId;
   if (!turnId) return undefined;
   const body = record(parsed._rawBody);
@@ -139,7 +143,10 @@ export function extractSelectedSkillPacket(
     return text !== undefined && parseEnvelope(text) !== undefined;
   });
   if (selectedInCurrentTail.length !== 1) {
-    throw new Error("ChatGPT Web selected-skill loading requires exactly one current-turn skill");
+    if (opts?.strictSingle) {
+      throw new Error("ChatGPT Web selected-skill loading requires exactly one current-turn skill");
+    }
+    return undefined;
   }
 
   let precedingTaskFound = false;
@@ -157,6 +164,20 @@ export function extractSelectedSkillPacket(
   const parsedTail = parsed.context.messages.at(-1);
   if (parsedTail?.role !== "user" || parsedMessageText(parsedTail.content) !== sourceText) return undefined;
   return packetOf(sourceText!, parsed.context.messages.length - 1, envelope);
+}
+
+/**
+ * Extract one Codex-generated skill tail for the Full + danger-full-access MCP loader. The sandbox
+ * gate authorizes serving the body over the broker and unlocking native actions after the ack; an
+ * ambiguous multi-skill tail fails closed. Preamble delivery uses `identifySelectedSkillPacket`
+ * directly, which needs no sandbox authorization because it only relocates instruction text.
+ */
+export function extractSelectedSkillPacket(
+  parsed: CodexParsedRequest,
+  environment: ChatGptTurnEnvironment,
+): SelectedSkillPacket | undefined {
+  if (environment.sandboxPolicy.type !== "dangerFullAccess") return undefined;
+  return identifySelectedSkillPacket(parsed, { strictSingle: true });
 }
 
 /** Remove exactly the validated skill message from a shallow request clone. */
