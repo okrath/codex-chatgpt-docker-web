@@ -174,6 +174,11 @@ function validateBatchTools(parsed: CodexParsedRequest, requests: BrokerToolRequ
   }
 }
 
+// Module-level (not per-adapter): the server builds a fresh adapter for every HTTP request, so
+// state that must survive a turn's retry — like which turns had a preload delivery failure — has to
+// live here, the same lifetime as the shared turn-session registry.
+const preloadDisabledTurns = new Set<string>();
+
 export function createChatGptWebAdapter(provider: CodexProviderConfig): ProviderAdapter {
   const worker = ChatGptBrowserWorker.forProvider(provider);
   const broker = TurnBroker.forSocket(brokerSocketPath(provider));
@@ -197,9 +202,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
       ? resolve(expandUserPath(provider.chatgptWeb.lunaCheckpointStatePath))
       : undefined,
   );
-  // Turns whose preload delivery failed once; their retry compiles without preload (a single
-  // slimmed message) so a delivery failure never fails a turn slimming could have carried.
-  const preloadDisabledTurns = new Set<string>();
   const startRuntime = (
     parsed: CodexParsedRequest,
     environment: ReturnType<typeof extractChatGptTurnEnvironment> | undefined,
