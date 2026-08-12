@@ -31,6 +31,9 @@ services:
       # Testing/tuning knob: lower the Luna slimming/preload threshold (min 1000) so slimming and
       # preload engage on ordinary threads. Empty = the real 28k transport budget. Never raises it.
       CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE: "${CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE:-}"
+      # Max preload parts before falling back to collapse (Free tier throttles ~3 rapid messages).
+      # Empty = code default (3). Raise it only to exercise the failure/fallback path in testing.
+      CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS:-}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:17841/healthz"]
       interval: 30s
