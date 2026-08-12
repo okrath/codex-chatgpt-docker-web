@@ -42,12 +42,27 @@ both sandboxes. Result: `<skill name=` count still 0 across 4 rollouts (2 `works
 sandbox-gated — it simply does not occur.** The earlier belief that 08-11 injected was wrong: those
 markers were build-time test fixtures. No retained rollout contains a real injected `<skill>` tail.
 
-### Standing question
+### Standing question — CLOSED (2026-08-12): injection does not occur in this setup
 
-Whether Codex Desktop 0.147-alpha injects a `<skill>` body at all, or the skill-offload subsystem
-(A4 + the shipped MCP loader) targets a format Codex never emits. The full-access-loader live smoke
-(2026-08-11, isolated workspace, rollout not retained) should be re-examined before trusting the
-premise.
+Resolved by an exhaustive check:
+
+- Scanned **all 543 retained Codex session rollouts** → **zero** real standalone
+  `<skill name="X">…</skill>` user-item tails (the shape the bridge detects).
+- The full-access-loader plan keeps **no captured request evidence** (no `reports/`); its
+  `<skill>` / `codex_tool_call` mentions are plan *descriptions*, and its test fixtures are
+  hand-authored (`<skill name="ck:ask">…` in `tests/selected-skill.test.ts`), not captured Codex
+  output.
+- Live confirmation the same day: the bridge log detected **no** skill tail across four tests
+  (2 `workspace-write` + 2 `danger-full-access`, browser + Codex Desktop + connector all on account
+  A).
+
+**Conclusion:** Codex Desktop 0.147.0-alpha.6.6 does not inject a `<skill>` body in this setup, and
+there is no retained proof it ever did (the 2026-08-11 "smoke" left no trace and cannot be trusted).
+Both A4 and the shipped MCP selected-skill loader depend on that injection, so **both are inert /
+effectively dead code here** — kept per the user's decision and documented; neither has runtime
+effect unless Codex's skill mechanism starts emitting `<skill>` bodies. Skills themselves work fine
+via the catalog + on-demand `SKILL.md` read (e.g. the ck:plan run that produced
+`plans/2026-08-12-transport-layer-refactor`).
 
 ## Docs (done)
 
