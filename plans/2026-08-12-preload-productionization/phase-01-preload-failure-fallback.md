@@ -1,6 +1,20 @@
 # Phase 01 (A3): fallback on preload-delivery failure
 
-Status: planned
+Status: done; live-verified end-to-end.
+
+## Result
+
+Live smoke (free Luna, budget-override to force 4 parts, part cap raised to 5, per-part timeout
+lowered to 15s for a fast repro): parts 1-3 delivered, part 4 hit the Free-tier throttle and failed,
+the turn was reclassified `preload_delivery_failed`, and the retry compiled a single slimmed message
+(`✂️ … collapsed → ~9k tokens`, no `📨 preload split`) that completed. No loop.
+
+Bug found and fixed during the smoke: the server builds a fresh adapter per HTTP request
+(`server.ts` `adapterFactory(...)`), so a `preloadDisabledTurns` set in the adapter closure was
+empty again on the retry and the fallback never engaged — the turn looped. Moving the set to module
+scope (the lifetime of the shared turn-session registry) fixed it. Also added
+`CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS` so the failure path can be exercised without waiting the
+full 180s.
 
 ## Context
 

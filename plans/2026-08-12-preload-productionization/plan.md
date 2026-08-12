@@ -47,9 +47,9 @@ the Web model and cost ~4-5k tokens).
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 (A3) | [Fallback on preload-delivery failure](./phase-01-preload-failure-fallback.md) | implemented; static green, live smoke pending |
-| 2 (A2) | [Enable preload by default](./phase-02-enable-preload-by-default.md) | implemented; static green |
-| 3 (A1) | [Preserve user rule content by default](./phase-03-preserve-user-rules.md) | implemented; static green |
+| 1 (A3) | [Fallback on preload-delivery failure](./phase-01-preload-failure-fallback.md) | done; live-verified end-to-end |
+| 2 (A2) | [Enable preload by default](./phase-02-enable-preload-by-default.md) | done; live-exercised (preload engaged automatically) |
+| 3 (A1) | [Preserve user rule content by default](./phase-03-preserve-user-rules.md) | done; static green |
 
 ## Implementation notes (2026-08-12)
 
