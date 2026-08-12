@@ -31,13 +31,23 @@ Both A4 (preamble path) and the pre-existing MCP loader depend on Codex injectin
 With injection off, **both are dormant**. A4 is kept (consistent with the shipped MCP loader) and
 marked inert; it will activate automatically if/when injection returns.
 
-### Open hypothesis to investigate (user)
+### Account hypothesis — tested and ruled out (2026-08-12)
 
-The connector/tunnel/API key were registered under ChatGPT account **A**, but the Docker Chromium is
-logged into account **B**. The user suspects this account mismatch may be why skill-body injection
-stopped. Worth verifying whether Codex Desktop's skill-injection behavior is tied to the signed-in
-account's entitlements; aligning all three (browser login + connector + tunnel) on one account is the
-clean fix regardless.
+The user suspected an account mismatch (connector/tunnel under ChatGPT account **A**, Docker Chromium
+under **B**) as the cause. We reset the Docker browser login (cleared only
+`browser/storage-state.json` + `.verified.json` + `login-profile`; kept the tunnel), re-logged the
+browser and Codex Desktop onto account **A**, and re-tested with the correct link-form invocation on
+both sandboxes. Result: `<skill name=` count still 0 across 4 rollouts (2 `workspace-write` + 2
+`danger-full-access`), no `user_selected_skill` in the log. **Injection is not account- or
+sandbox-gated — it simply does not occur.** The earlier belief that 08-11 injected was wrong: those
+markers were build-time test fixtures. No retained rollout contains a real injected `<skill>` tail.
+
+### Standing question
+
+Whether Codex Desktop 0.147-alpha injects a `<skill>` body at all, or the skill-offload subsystem
+(A4 + the shipped MCP loader) targets a format Codex never emits. The full-access-loader live smoke
+(2026-08-11, isolated workspace, rollout not retained) should be re-examined before trusting the
+premise.
 
 ## Docs (done)
 

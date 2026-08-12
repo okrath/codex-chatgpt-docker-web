@@ -83,8 +83,9 @@ can blow the 28k budget with no offload path.
   invocation; `<skill name=` count 0 both times). The same Codex injected bodies on 2026-08-11, so a
   host-side Codex behavior changed. Both A4 and the shipped MCP loader depend on that injection and
   are therefore dormant now. A4 is kept (consistent with the MCP loader) and marked inert; it
-  activates automatically if injection returns. User hypothesis to investigate: the connector/tunnel
-  (account A) vs browser login (account B) mismatch. Full detail in
+  activates automatically if injection returns. The account-mismatch hypothesis (connector under A,
+  browser under B) was tested by aligning both on account A and re-running — injection stayed 0 on
+  both sandboxes, so it is ruled out; injection is neither account- nor sandbox-gated. Full detail in
   [phase-03](./phase-03-docs-and-live-smoke.md).
 
 ## Acceptance criteria
