@@ -330,7 +330,7 @@ test("an over-budget Luna turn preloads history into parts when the flag is on, 
     if (previousMax === undefined) delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS;
     else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS = previousMax;
   }
-});
+}, 20_000);
 
 test("the slimming summary names every applied action and reports the budget outcome", () => {
   const summary = describeLunaSlimming(

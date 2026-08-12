@@ -475,18 +475,25 @@ export function splitLunaPreamble(
   modelId: string,
   maxParts: number,
 ): LunaPreloadSplit | undefined {
-  let finalCompiled: CompiledChatGptWebPrompt | undefined;
-  let splitAt = 0;
-  for (; splitAt < messages.length; splitAt += 1) {
-    const suffix = messages.slice(splitAt);
-    if (suffix.length === 0) break;
-    finalCompiled = compileMessages(suffix);
-    if (estimateCompiledChatGptWebInputTokens(finalCompiled, modelId) <= budgetTokens) break;
+  // Peeling more (larger splitAt) only shrinks the suffix, so the compiled size is monotonic in
+  // splitAt. Binary-search the smallest splitAt whose suffix fits — O(log n) compiles, not O(n) —
+  // which also minimizes how much moves into the preamble (fewest parts). The last message (the
+  // current task) always stays, so splitAt never reaches messages.length.
+  let lo = 1;
+  let hi = messages.length - 1;
+  let splitAt = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const compiled = compileMessages(messages.slice(mid));
+    if (estimateCompiledChatGptWebInputTokens(compiled, modelId) <= budgetTokens) {
+      splitAt = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
   }
-  if (splitAt === 0) return undefined; // nothing peeled — the turn already fit or has no older span
-  if (!finalCompiled || estimateCompiledChatGptWebInputTokens(finalCompiled, modelId) > budgetTokens) {
-    return undefined; // even the current task plus contracts cannot fit; preload cannot help
-  }
+  if (splitAt < 1) return undefined; // even the current task plus contracts cannot fit; preload cannot help
+  const finalCompiled = compileMessages(messages.slice(splitAt));
   const preamble = chunkMessagesIntoPreamble(messages.slice(0, splitAt), budgetTokens, modelId);
   if (preamble.length === 0 || preamble.length > maxParts) return undefined; // too many parts — fall back to collapse
   const preambleTokens = preamble.reduce((sum, chunk) => sum + estimateTokens(chunk, modelId), 0);
