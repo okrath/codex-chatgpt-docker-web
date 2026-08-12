@@ -70,7 +70,7 @@ context is semantically eligible for preload.
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | [Transport contract and seams](./phase-01-transport-contract-and-seams.md) | Pending |
+| 1 | [Transport contract and seams](./phase-01-transport-contract-and-seams.md) | Done |
 | 2 | [Prompt compilation pipeline](./phase-02-prompt-compilation-pipeline.md) | Pending |
 | 3 | [Browser delivery runtime](./phase-03-browser-delivery-runtime.md) | Pending |
 | 4 | [Integration verification and migration](./phase-04-integration-verification-and-migration.md) | Pending |

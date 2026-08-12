@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Transport contract and seams"
-status: pending
+status: done
 priority: P1
 dependencies: []
 effort: "1-2d"
@@ -52,17 +52,49 @@ the browser worker owns DOM delivery and upstream completion evidence.
 5. Add contract tests for empty/undefined preamble, ordered parts, accounting, and lifecycle ownership.
 6. Compile and run the focused suites before proceeding to the next phase.
 
-## Implementation Steps
+## Implementation Steps (done 2026-08-12)
 
-<!-- Detailed steps -->
+### Consumer inventory (step 1)
+
+- `CompiledChatGptWebPrompt`: 21 references across 7 files — `prompt.ts` (owner), `index.ts`,
+  `luna-context-slimming.ts`, `browser-worker.ts`, `input-tokens.ts`, `browser-helper-main.ts`,
+  `launcher-helper-client.ts`.
+- The real transport boundary is `prepare()` returning `CompiledChatGptWebPrompt & { release }`
+  (browser-worker.ts:295). Consumed at browser-worker.ts:1874 (`.preamble`), :2080 (`.release()`),
+  and the input-token estimate is computed there via `estimateCompiledChatGptWebInputTokens`
+  (browser-worker.ts:1810) — it is not a field on the prepared shape today.
+- `release()` producers: index.ts:342/389, browser-helper-main.ts:132, browser-worker.ts:1455
+  (smoke). Consumers: browser-worker.ts:2080, launcher-helper-client.ts:195.
+- `estimatedTokens`/`estimatedTotalTokens` live on `LunaBudgetedCompilation`/`LunaPreloadSplit`
+  (luna-context-slimming.ts) and feed usage + the over-budget trace in index.ts.
+
+### What landed (additive, no behavior change)
+
+- New `src/adapters/chatgpt-web/transport-contract.ts`:
+  - `PreparedChatGptWebPrompt` = the named boundary type (`CompiledChatGptWebPrompt & { release }`).
+  - `ChatGptWebTransportPlan` = the immutable transport contract (final message, ordered preamble,
+    images, `estimatedInputTokens`, `trimmedCompactionMessages`, `release`). Imports only compiled
+    data types from `prompt.ts` — no Playwright/DOM, no Luna policy.
+  - `toChatGptWebTransportPlan(prepared, estimatedInputTokens)` compatibility mapper (absent
+    preamble → `[]`, absent trim → `0`).
+- `browser-worker.ts`: the `prepare` signature now uses the named `PreparedChatGptWebPrompt` (pure
+  type alias; structurally identical to the old inline type).
+- `tests/transport-contract.test.ts`: 5 tests — field mapping, empty/undefined preamble, order
+  preservation, trim default, lifecycle passthrough.
+- Consumers are NOT rewired to the plan type yet; that migration is phases 2-3. `CompiledChatGptWebPrompt`
+  stays as the compatibility shape.
+
+### Verification
+
+- `bunx tsc --noEmit` clean; full suite 349 pass / 0 fail (344 baseline + 5 new).
 
 ## Success Criteria
 
-- [ ] All current `CompiledChatGptWebPrompt` consumers are enumerated and mapped.
-- [ ] New transport contract has no Playwright/Luna-specific imports.
-- [ ] Single-message prepared output is unchanged.
-- [ ] Preamble ordering and token accounting are explicit and tested.
-- [ ] `bunx tsc --noEmit` and focused transport tests pass.
+- [x] All current `CompiledChatGptWebPrompt` consumers are enumerated and mapped.
+- [x] New transport contract has no Playwright/Luna-specific imports.
+- [x] Single-message prepared output is unchanged (mapper is additive; no delivery path changed).
+- [x] Preamble ordering and token accounting are explicit and tested.
+- [x] `bunx tsc --noEmit` and focused transport tests pass.
 
 ## Risk Assessment
 

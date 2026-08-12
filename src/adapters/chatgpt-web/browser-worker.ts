@@ -27,6 +27,7 @@ import {
   estimateCompiledChatGptWebMessageTokens,
 } from "./input-tokens";
 import { CHATGPT_MAX_INPUT_IMAGES, type CompiledChatGptWebPrompt, type ChatGptWebPromptImage } from "./prompt";
+import type { PreparedChatGptWebPrompt } from "./transport-contract";
 import { estimateCompiledChatGptWebInputTokens } from "./input-tokens";
 import {
   assertAuthenticatedChatGptPage,
@@ -292,7 +293,7 @@ export interface BrowserTurn {
   modelId: string;
   reasoning?: string;
   capabilities: ChatGptWebCapabilities;
-  prepare: () => Promise<CompiledChatGptWebPrompt & { release: () => void }>;
+  prepare: () => Promise<PreparedChatGptWebPrompt>;
   abortSignal?: AbortSignal;
   onHeartbeat?: () => void;
   /** Visible ChatGPT reasoning-summary step titles only; never hidden chain-of-thought. */
