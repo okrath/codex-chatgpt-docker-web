@@ -363,6 +363,107 @@ function appendCollapseIndexToMarker(messages: readonly CodexMessage[], indexTex
       : message);
 }
 
+/**
+ * Multi-message preload: instead of collapsing older history into a lossy summary, deliver it as
+ * ordered earlier-context browser messages before the final task message, each within the transport
+ * budget, so the model accumulates the whole thread in its (~1M) window. Off by default — set
+ * CODEX_CHATGPT_WEB_LUNA_PRELOAD to on/1/true to enable. Requires the browser-side delivery loop
+ * (browser-worker.ts), which is verified live.
+ */
+export function lunaPreloadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.CODEX_CHATGPT_WEB_LUNA_PRELOAD?.trim().toLowerCase();
+  return value === "on" || value === "1" || value === "true";
+}
+
+/** Fraction of the transport budget a single preload part may use, leaving room for the wrapper. */
+const LUNA_PRELOAD_PART_BUDGET_FRACTION = 0.85;
+
+function splitTextByTokenBudget(text: string, targetTokens: number, modelId?: string): string[] {
+  const out: string[] = [];
+  let rest = text;
+  const approxChars = Math.max(1, targetTokens * 3);
+  while (rest.length > 0) {
+    let take = Math.min(rest.length, approxChars);
+    while (take > 1 && estimateTokens(rest.slice(0, take), modelId) > targetTokens) take = Math.floor(take * 0.9);
+    out.push(rest.slice(0, take));
+    rest = rest.slice(take);
+  }
+  return out;
+}
+
+/** Group older messages into preload parts, each within the per-part token budget. */
+export function chunkMessagesIntoPreamble(
+  messages: readonly CodexMessage[],
+  budgetTokens: number,
+  modelId?: string,
+): string[] {
+  const target = Math.max(1, Math.floor(budgetTokens * LUNA_PRELOAD_PART_BUDGET_FRACTION));
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentTokens = 0;
+  const flush = (): void => {
+    if (current.length > 0) chunks.push(current.join("\n\n"));
+    current = [];
+    currentTokens = 0;
+  };
+  for (const message of messages) {
+    const block = `[${message.role}]\n${readableMessageText(message)}`;
+    const blockTokens = estimateTokens(block, modelId);
+    if (blockTokens > target) {
+      flush();
+      for (const piece of splitTextByTokenBudget(block, target, modelId)) chunks.push(piece);
+      continue;
+    }
+    if (currentTokens + blockTokens > target) flush();
+    current.push(block);
+    currentTokens += blockTokens;
+  }
+  flush();
+  return chunks;
+}
+
+export interface LunaPreloadSplit {
+  finalMessages: CodexMessage[];
+  finalCompiled: CompiledChatGptWebPrompt;
+  preamble: string[];
+  estimatedTotalTokens: number;
+}
+
+/**
+ * Peel the oldest messages into preload parts until the remaining messages compile within budget.
+ * Returns undefined when the irreducible core (system prompt, contracts, current task) alone still
+ * exceeds the budget — nothing preload can rescue — so the caller falls back to collapse.
+ */
+export function splitLunaPreamble(
+  messages: readonly CodexMessage[],
+  compileMessages: (subset: readonly CodexMessage[]) => CompiledChatGptWebPrompt,
+  budgetTokens: number,
+  modelId: string,
+): LunaPreloadSplit | undefined {
+  let finalCompiled: CompiledChatGptWebPrompt | undefined;
+  let splitAt = 0;
+  for (; splitAt < messages.length; splitAt += 1) {
+    const suffix = messages.slice(splitAt);
+    if (suffix.length === 0) break;
+    finalCompiled = compileMessages(suffix);
+    if (estimateCompiledChatGptWebInputTokens(finalCompiled, modelId) <= budgetTokens) break;
+  }
+  if (splitAt === 0) return undefined; // nothing peeled — the turn already fit or has no older span
+  if (!finalCompiled || estimateCompiledChatGptWebInputTokens(finalCompiled, modelId) > budgetTokens) {
+    return undefined; // even the current task plus contracts cannot fit; preload cannot help
+  }
+  const preamble = chunkMessagesIntoPreamble(messages.slice(0, splitAt), budgetTokens, modelId);
+  if (preamble.length === 0) return undefined;
+  const preambleTokens = preamble.reduce((sum, chunk) => sum + estimateTokens(chunk, modelId), 0);
+  const finalTokens = estimateCompiledChatGptWebInputTokens(finalCompiled, modelId);
+  return {
+    finalMessages: messages.slice(splitAt),
+    finalCompiled,
+    preamble,
+    estimatedTotalTokens: preambleTokens + finalTokens,
+  };
+}
+
 export interface LunaBudgetedCompilation {
   compiled: CompiledChatGptWebPrompt;
   /** The message list the compiled prompt was built from (post-slimming). */
@@ -376,6 +477,8 @@ export interface LunaBudgetedCompilation {
   collapsedTokens: number;
   /** Verbatim text of every collapsed message, for fail-open recall in Full mode. */
   removedHistory: RemovedHistoryMessage[];
+  /** Number of preload parts delivered before the final message; 0 unless preload engaged. */
+  preloadParts: number;
 }
 
 /**
@@ -413,6 +516,7 @@ export function compileLunaBudgetedPrompt(
     collapsedMessages: 0,
     collapsedTokens: 0,
     removedHistory: [],
+    preloadParts: 0,
   };
   if (parsed.modelId !== CHATGPT_WEB_LUNA_MODEL_ID || parsed._compactionRequest) return result;
 
@@ -440,6 +544,26 @@ export function compileLunaBudgetedPrompt(
     result.removedSections.push({ name: section, estTokens: stripped.estTokensRemoved });
   }
   if (result.removedSections.length > 0) recompile();
+
+  // Preload (opt-in): when the turn still exceeds the budget after dropping the harness-only rule
+  // sections, deliver the older span as ordered earlier-context messages instead of collapsing it
+  // into a lossy summary. Falls through to collapse when preload cannot fit the irreducible core.
+  if (result.estimatedTokens > budget && lunaPreloadEnabled()) {
+    const split = splitLunaPreamble(
+      working.context.messages,
+      subset => compileWith(withMessages(subset)),
+      budget,
+      parsed.modelId,
+    );
+    if (split) {
+      result.compiled = { ...split.finalCompiled, preamble: split.preamble };
+      result.estimatedTokens = split.estimatedTotalTokens;
+      result.messages = split.finalMessages;
+      result.slimmed = true;
+      result.preloadParts = split.preamble.length;
+      return result;
+    }
+  }
 
   if (result.estimatedTokens > budget) {
     const condensed = condenseLunaRuleSections(working.context.messages, parsed.modelId);

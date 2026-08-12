@@ -22,6 +22,12 @@ export interface CompiledChatGptWebPrompt {
   images: ChatGptWebPromptImage[];
   /** Oldest history items removed by native-style compaction fit recovery; absent on normal turns. */
   trimmedCompactionMessages?: number;
+  /**
+   * Ordered earlier-context messages delivered as their own browser messages before `text`, only
+   * when a single message would exceed the transport budget. Absent/empty on normal turns, which
+   * keep the exact single-message flow. The final message (`text`) carries the task and contracts.
+   */
+  preamble?: string[];
 }
 
 export interface CompileChatGptWebPromptOptions {

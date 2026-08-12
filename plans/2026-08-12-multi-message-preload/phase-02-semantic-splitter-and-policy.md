@@ -1,6 +1,30 @@
 # Phase 02: semantic splitter and policy integration
 
-Status: planned
+Status: implemented behind an opt-in flag; static-verified (359 tests, typecheck green).
+
+## Result
+
+- `luna-context-slimming.ts`: `splitLunaPreamble` peels the oldest messages into preload parts until
+  the remaining messages compile within budget (returns undefined when the irreducible core alone
+  overflows, so the caller falls back to collapse); `chunkMessagesIntoPreamble` groups older
+  messages into parts each within a per-part budget and splits a single oversized message.
+- Integration: after dropping the harness-only rule sections, when the turn still exceeds budget and
+  `CODEX_CHATGPT_WEB_LUNA_PRELOAD` is on, preload the older span instead of collapsing it; otherwise
+  the existing collapse path runs unchanged. Usage sums the parts (`estimatedTokens`).
+- **Default off.** The delivery loop is live-gated, so preload ships behind the env flag: off = the
+  exact current behavior (zero risk); on = over-budget turns preload verbatim history. Once phase 3
+  proves the loop live, the intended policy flip — keep `## Rule:` sections by default and make
+  `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` opt-in — lands as a follow-up.
+- Tests: flag parsing; per-part budget bound and oversized-message split; an over-budget Luna turn
+  producing parts (each within budget, final within budget) with the flag on, and collapsing with it
+  off.
+
+## Deferred to a follow-up (after live proof)
+
+- Flip the rule-drop default to keep-by-default (the user-intent policy change).
+- Fallback-on-preload-failure retry (recompile as a slimmed single message if delivery fails);
+  currently a preload-delivery failure fails the turn, which is no worse than today because preload
+  only engages on turns that would otherwise hard-fail.
 
 ## Context
 

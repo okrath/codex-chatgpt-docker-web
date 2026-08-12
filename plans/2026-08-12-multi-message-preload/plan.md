@@ -52,9 +52,18 @@ ceremony, and it works in browser-only and Pro modes too. Precedence per turn:
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 | [Chunked delivery mechanics](./phase-01-chunked-delivery-mechanics.md) | planned |
-| 2 | [Semantic splitter and policy integration](./phase-02-semantic-splitter-and-policy.md) | planned |
-| 3 | [Live smoke, limits reconnaissance, docs](./phase-03-live-smoke-and-docs.md) | planned |
+| 1 | [Chunked delivery mechanics](./phase-01-chunked-delivery-mechanics.md) | implemented; static green, DOM loop live-gated |
+| 2 | [Semantic splitter and policy integration](./phase-02-semantic-splitter-and-policy.md) | implemented behind opt-in flag; static green |
+| 3 | [Live smoke, limits reconnaissance, docs](./phase-03-live-smoke-and-docs.md) | planned — enable with `CODEX_CHATGPT_WEB_LUNA_PRELOAD=on` to run |
+
+## How to live-test (phase 3)
+
+Preload ships **off by default**. To exercise it: set `CODEX_CHATGPT_WEB_LUNA_PRELOAD=on` in the
+container environment (docker-compose `environment:` or `docker compose exec … -e`), restart, then
+run a Luna turn large enough to exceed ~28k after rule-drop. The bridge log shows
+`📨 Luna preload split this over-budget turn into N earlier-context part(s)` and one
+`preload part i/N` line per delivered message. Watch for Free-tier rate-limit dialogs between parts
+(the reconnaissance this phase measures).
 
 ## Acceptance criteria
 

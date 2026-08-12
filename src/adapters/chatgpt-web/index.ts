@@ -314,14 +314,19 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
         promptOptions,
       );
       lastBudgetedCompilation = result;
-      if (result.slimmed) {
+      if (result.preloadParts > 0) {
+        const preloadSummary = `📨 Luna preload split this over-budget turn into ${result.preloadParts} earlier-context part(s)`
+          + ` plus the final task message (~${result.estimatedTokens.toLocaleString("en-US")} tokens total).`;
+        console.info(`[chatgpt-web] ${preloadSummary}`);
+        trace.push({ kind: "commentary", text: preloadSummary });
+      } else if (result.slimmed) {
         const summary = describeLunaSlimming(result, CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
         console.info(`[chatgpt-web] ${summary}`);
         if (result.beforeTokens > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
           trace.push({ kind: "commentary", text: summary });
         }
       }
-      if (result.estimatedTokens > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
+      if (result.preloadParts === 0 && result.estimatedTokens > CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET) {
         const suggestions = describeLunaOverflowSuggestions(
           result.messages,
           result.estimatedTokens,

@@ -254,6 +254,26 @@ export const CHATGPT_COMPOSER_DOCUMENT_END_KEY = process.platform === "darwin"
   ? "Meta+ArrowDown"
   : "Control+End";
 
+/** Bound each preload acknowledgement so a stuck part fails the turn instead of hanging forever. */
+export const CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS = 180_000;
+
+/**
+ * Wrap one preload context chunk with a fixed acknowledge-and-wait instruction. The bridge splits
+ * an over-budget turn into ordered context parts plus a final task message; each part asks the
+ * model only to store the context and reply "OK". The turn does not depend on that reply — any
+ * completed response advances delivery — but the instruction keeps the intermediate answers short.
+ */
+export function chatGptPreambleMessageText(chunk: string, index: number, total: number): string {
+  return [
+    `[Codex context preload — part ${index + 1} of ${total}]`,
+    "This is earlier task context, split only to fit the per-message size limit. Read and remember"
+    + " it, then reply with just OK. Do not act on it and do not answer anything yet — the complete"
+    + " current instruction arrives in the final part.",
+    "",
+    chunk,
+  ].join("\n");
+}
+
 export interface BrowserTurn {
   traceId: string;
   modelId: string;
@@ -1081,6 +1101,79 @@ export class ChatGptBrowserWorker {
     return composer;
   }
 
+  /**
+   * Deliver one preload context part into the current chat: attach it, submit it, and wait for the
+   * model's (discarded) acknowledgement to complete before returning. Reuses the existing submission
+   * and completion primitives; the crown-jewel final-answer streaming loop in `run` is untouched.
+   */
+  private async deliverPreambleChunk(
+    page: Page,
+    text: string,
+    index: number,
+    total: number,
+    mode: { localTools: boolean },
+    turn: BrowserTurn,
+    diagnostics: ChatGptBrowserDiagnostics,
+    deadline: number | undefined,
+    stageSignal: AbortSignal,
+  ): Promise<void> {
+    console.info(
+      `[chatgpt-web] browser turn ${turn.traceId} preload part ${index + 1}/${total} (chars=${text.length})`,
+    );
+    await this.attachPrompt(page, text, mode.localTools, checkpoint => diagnostics.capture(page, checkpoint));
+    const responseTurns = page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR);
+    const initialResponseTurnCount = await responseTurns.count();
+    const responseTurn = responseTurns.nth(initialResponseTurnCount);
+    const userTurns = page.locator(CHATGPT_USER_TURN_SELECTOR);
+    const initialUserTurnCount = await userTurns.count();
+    const composer = await this.activeComposer(page);
+    const sendButton = composer.locator("xpath=ancestor::form[1]").getByTestId("send-button");
+    await sendButton.waitFor({ state: "visible", timeout: browserStageTimeouts.send });
+    if (!await sendButton.isEnabled()) {
+      throw new Error(`ChatGPT send button is disabled for preload part ${index + 1}/${total}`);
+    }
+    await settleChatGptUi();
+    await throwIfChatGptSessionFailureAlert(page);
+    await sendButton.press("Enter");
+    await this.waitForSubmissionAccepted(
+      page, userTurns, responseTurns, responseTurn, initialUserTurnCount, initialResponseTurnCount, stageSignal,
+    );
+
+    const completionTracker = new ChatGptCompletionTracker();
+    const responseDeadline = Date.now() + CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS;
+    let lastHeartbeat = 0;
+    for (;;) {
+      if (page.isClosed()) throw new Error("ChatGPT browser tab was closed during context preload");
+      if (turn.abortSignal?.aborted || stageSignal.aborted) {
+        throw new DOMException("ChatGPT web turn aborted", "AbortError");
+      }
+      if (deadline !== undefined && Date.now() >= deadline) throw new Error("ChatGPT web turn timed out");
+      if (Date.now() >= responseDeadline) {
+        throw new Error(`ChatGPT preload part ${index + 1}/${total} did not acknowledge in time`);
+      }
+      if (Date.now() - lastHeartbeat >= 10_000) {
+        turn.onHeartbeat?.();
+        lastHeartbeat = Date.now();
+      }
+      await throwIfChatGptRateLimitDialog(page);
+      await throwIfChatGptSessionFailureAlert(page);
+      await throwIfChatGptTerminalErrorAlert(responseTurn);
+      const snapshot = await this.responseDomSnapshot(responseTurn);
+      const running = await page.locator(CHATGPT_STOP_BUTTON_SELECTOR).last().isVisible().catch(() => false);
+      if (snapshot.responsePresent && completionTracker.update({
+        responsePresent: snapshot.responsePresent,
+        running,
+        currentText: snapshot.visibleText,
+        currentHtml: snapshot.fullHtml,
+        completionActionVisible: snapshot.completionActionVisible,
+      })) {
+        await diagnostics.capture(page, `preload-part-${index + 1}-complete`);
+        return;
+      }
+      await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+    }
+  }
+
   private async waitForSubmissionAccepted(
     page: Page,
     userTurns: Locator,
@@ -1762,6 +1855,28 @@ export class ChatGptBrowserWorker {
         )
       ));
       await diagnostics.capture(page, "effort-selection-complete");
+      // Preload: when the turn was split to fit the transport budget, deliver each earlier-context
+      // part as its own message in this same chat before the final task message. Empty on normal
+      // turns, so the single-message flow below is byte-identical.
+      const preamble = prepared.preamble ?? [];
+      for (let index = 0; index < preamble.length; index += 1) {
+        await this.runStage(
+          turn.traceId,
+          "preamble_delivery",
+          CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS + browserStageTimeouts.send,
+          stageSignal => this.deliverPreambleChunk(
+            page,
+            chatGptPreambleMessageText(preamble[index]!, index, preamble.length),
+            index,
+            preamble.length,
+            mode,
+            turn,
+            diagnostics,
+            deadline,
+            stageSignal,
+          ),
+        );
+      }
       await this.runStage(turn.traceId, "prompt_attachment", browserStageTimeouts.promptAttachment, () => (
         this.attachPrompt(page, prepared.text, mode.localTools, checkpoint => diagnostics.capture(page, checkpoint))
       ));

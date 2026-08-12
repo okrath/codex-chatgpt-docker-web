@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { Page } from "playwright-core";
-import { CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_PROMPT_INSERT_CHUNK_CHARS, ChatGptBrowserWorker, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_TABS, assertChatGptWebInputWithinLimits, browserDiagnosticCheckpoint, browserDiagnosticIncludesScreenshot, chatGptSubmissionEvidence, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert } from "../src/adapters/chatgpt-web/browser-worker";
+import { CHATGPT_COMPOSER_DOCUMENT_END_KEY, CHATGPT_PROMPT_INSERT_CHUNK_CHARS, ChatGptBrowserWorker, ChatGptTurnDomHealthTracker, ChatGptVisibleTraceTracker, MAX_CHATGPT_BROWSER_TABS, assertChatGptWebInputWithinLimits, browserDiagnosticCheckpoint, browserDiagnosticIncludesScreenshot, chatGptPreambleMessageText, chatGptSubmissionEvidence, isChatGptTraceControl, redactChatGptUiDiagnostic, resolveBrowserConfig, resolveChatGptToolConfirmation, stripChatGptTraceControlSuffix, throwIfChatGptRateLimitDialog, throwIfChatGptSessionFailureAlert, throwIfChatGptTerminalErrorAlert } from "../src/adapters/chatgpt-web/browser-worker";
 import { CHATGPT_CONNECTOR_NAME, defaultChromeExecutable } from "../src/config";
 import { parseChatGptEffortSliderState } from "../src/chatgpt-session";
 
@@ -11,6 +11,23 @@ test("Codex context uses the owned CDP composer transport, never the operating-s
   expect(workerSource).toContain("this.insertPromptText(page, prompt)");
   expect(workerSource).toContain("this.insertPromptText(page, ` ${prompt}`)");
   expect(workerSource).not.toMatch(/\bclipboard\b|pbcopy|pbpaste/i);
+});
+
+test("preload parts wrap context with an acknowledge-and-wait instruction and keep the chunk", () => {
+  const wrapped = chatGptPreambleMessageText("EARLIER-CONTEXT-BODY", 0, 3);
+  expect(wrapped).toContain("part 1 of 3");
+  expect(wrapped).toContain("reply with just OK");
+  expect(wrapped).toContain("EARLIER-CONTEXT-BODY");
+  expect(chatGptPreambleMessageText("x", 2, 3)).toContain("part 3 of 3");
+});
+
+test("preload delivery is guarded so the single-message flow is unchanged when no preamble exists", () => {
+  const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
+  // The preamble loop only runs when the prepared payload carries parts; the final attach/send is
+  // reached unconditionally after it.
+  expect(workerSource).toContain("const preamble = prepared.preamble ?? [];");
+  expect(workerSource).toContain("this.deliverPreambleChunk(");
+  expect(workerSource).toContain('this.runStage(turn.traceId, "prompt_attachment"');
 });
 
 test("completed prompts activate the scoped semantic send control", () => {

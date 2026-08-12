@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   buildCollapsedHistoryIndex,
+  chunkMessagesIntoPreamble,
   collapseOldLunaHistory,
   compileLunaBudgetedPrompt,
   condenseLunaRuleSections,
@@ -8,8 +9,10 @@ import {
   LUNA_COLLAPSE_INDEX_STEP_BUDGETS,
   LUNA_DISPOSABLE_RULE_SECTIONS,
   lunaDisposableRuleSections,
+  lunaPreloadEnabled,
   stripLunaRuleSection,
 } from "../src/adapters/chatgpt-web/luna-context-slimming";
+import { estimateCompiledChatGptWebInputTokens } from "../src/adapters/chatgpt-web/input-tokens";
 import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET } from "../src/adapters/chatgpt-web/input-tokens";
 import { CHATGPT_WEB_LUNA_MODEL_ID } from "../src/adapters/chatgpt-web/model";
 import { estimateTokens } from "../src/lib/token-estimate";
@@ -245,6 +248,69 @@ test("an over-budget Luna thread converges under budget with the index inside th
   expect(result.compiled.text).toContain("Collapsed history index");
   // The last removable index in the marker is loadable from the recall store.
   expect(result.removedHistory.at(-1)!.index).toBe(result.removedHistory.length - 1);
+});
+
+test("preload flag parses on/1/true and defaults off", () => {
+  expect(lunaPreloadEnabled({})).toBe(false);
+  expect(lunaPreloadEnabled({ CODEX_CHATGPT_WEB_LUNA_PRELOAD: "off" })).toBe(false);
+  for (const value of ["on", "1", "true", "TRUE"]) {
+    expect(lunaPreloadEnabled({ CODEX_CHATGPT_WEB_LUNA_PRELOAD: value })).toBe(true);
+  }
+});
+
+test("preload chunking keeps every part within the per-part budget and splits an oversized message", () => {
+  const messages: CodexMessage[] = Array.from({ length: 30 }, (_unused, index) =>
+    userMessage(`context message ${index} ${"detail ".repeat(50)}`));
+  const budget = 2_000;
+  const chunks = chunkMessagesIntoPreamble(messages, budget);
+  expect(chunks.length).toBeGreaterThan(1);
+  for (const chunk of chunks) expect(estimateTokens(chunk)).toBeLessThanOrEqual(budget);
+
+  const oversized: CodexMessage[] = [userMessage(`huge ${"word ".repeat(6_000)}`)];
+  const split = chunkMessagesIntoPreamble(oversized, budget);
+  expect(split.length).toBeGreaterThan(1);
+  for (const chunk of split) expect(estimateTokens(chunk)).toBeLessThanOrEqual(budget);
+});
+
+test("an over-budget Luna turn preloads history into parts when the flag is on, and collapses when off", () => {
+  const build = (): CodexParsedRequest => {
+    const messages: CodexMessage[] = [];
+    for (let turn = 0; turn < 60; turn += 1) {
+      messages.push(userMessage(`turn ${turn} question ${BIG}`));
+      messages.push(assistantMessage(`turn ${turn} answer ${BIG}`));
+    }
+    messages.push(userMessage("current task: summarize the audit"));
+    return {
+      modelId: CHATGPT_WEB_LUNA_MODEL_ID,
+      stream: true,
+      options: { reasoning: undefined },
+      context: { systemPrompt: ["You are the model backend."], messages },
+    } as unknown as CodexParsedRequest;
+  };
+  const capabilities = { localToolsEnabled: true, solAvailable: false, proAvailable: false };
+  const previous = process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+  try {
+    process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = "on";
+    const preloaded = compileLunaBudgetedPrompt(build(), capabilities, "turn_12345678901234567890123456789012");
+    expect(preloaded.preloadParts).toBeGreaterThan(0);
+    expect(preloaded.compiled.preamble?.length).toBe(preloaded.preloadParts);
+    // Every delivered message — each preload part and the final — fits the transport budget.
+    for (const part of preloaded.compiled.preamble!) {
+      expect(estimateTokens(part)).toBeLessThanOrEqual(CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
+    }
+    expect(estimateCompiledChatGptWebInputTokens(preloaded.compiled, CHATGPT_WEB_LUNA_MODEL_ID))
+      .toBeLessThanOrEqual(CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
+    expect(preloaded.compiled.text).toContain("current task: summarize the audit");
+
+    delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+    const collapsed = compileLunaBudgetedPrompt(build(), capabilities, "turn_12345678901234567890123456789012");
+    expect(collapsed.preloadParts).toBe(0);
+    expect(collapsed.compiled.preamble).toBeUndefined();
+    expect(collapsed.collapsedMessages).toBeGreaterThan(0);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+    else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = previous;
+  }
 });
 
 test("the slimming summary names every applied action and reports the budget outcome", () => {

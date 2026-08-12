@@ -1,6 +1,19 @@
 # Phase 01: chunked delivery mechanics
 
-Status: planned
+Status: implemented; static-verified (359 tests, typecheck green). Browser DOM loop awaits phase-3 live smoke.
+
+## Result
+
+- `CompiledChatGptWebPrompt` gains optional `preamble: string[]`; absent/empty keeps the exact
+  single-message flow.
+- `browser-worker.ts`: `chatGptPreambleMessageText` (pure, exported) wraps each part with a fixed
+  acknowledge-and-wait instruction; `deliverPreambleChunk` attaches, submits, and waits for the
+  discarded acknowledgement using the existing submission/completion primitives (each part bounded
+  by `CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS`). The final-answer streaming loop in `run` is untouched —
+  the preamble loop runs before it and is skipped when empty.
+- Effort is selected once before the loop; files attach only on the final message.
+- Tests: the wrapper text; source-invariant that the loop is guarded and the final attach is
+  unconditional. The DOM interaction itself is live-only (no end-to-end page mock exists).
 
 ## Context
 
