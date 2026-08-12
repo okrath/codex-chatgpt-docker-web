@@ -296,9 +296,11 @@ test("an over-budget Luna turn preloads history into parts when the flag is on, 
     } as unknown as CodexParsedRequest;
   };
   const capabilities = { localToolsEnabled: true, solAvailable: false, proAvailable: false };
-  const previous = process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+  const previousFlag = process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+  const previousMax = process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS;
   try {
     process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = "on";
+    process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS = "50"; // allow enough parts to exercise the split
     const preloaded = compileLunaBudgetedPrompt(build(), capabilities, "turn_12345678901234567890123456789012");
     expect(preloaded.preloadParts).toBeGreaterThan(0);
     expect(preloaded.compiled.preamble?.length).toBe(preloaded.preloadParts);
@@ -310,14 +312,23 @@ test("an over-budget Luna turn preloads history into parts when the flag is on, 
       .toBeLessThanOrEqual(CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET);
     expect(preloaded.compiled.text).toContain("current task: summarize the audit");
 
+    // The part cap forces a fallback to collapse when a turn would need too many parts.
+    process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS = "1";
+    const capped = compileLunaBudgetedPrompt(build(), capabilities, "turn_12345678901234567890123456789012");
+    expect(capped.preloadParts).toBe(0);
+    expect(capped.collapsedMessages).toBeGreaterThan(0);
+
     delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+    delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS;
     const collapsed = compileLunaBudgetedPrompt(build(), capabilities, "turn_12345678901234567890123456789012");
     expect(collapsed.preloadParts).toBe(0);
     expect(collapsed.compiled.preamble).toBeUndefined();
     expect(collapsed.collapsedMessages).toBeGreaterThan(0);
   } finally {
-    if (previous === undefined) delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
-    else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = previous;
+    if (previousFlag === undefined) delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD;
+    else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD = previousFlag;
+    if (previousMax === undefined) delete process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS;
+    else process.env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS = previousMax;
   }
 });
 

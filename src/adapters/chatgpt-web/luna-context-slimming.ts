@@ -379,6 +379,21 @@ export function lunaPreloadEnabled(env: NodeJS.ProcessEnv = process.env): boolea
 /** Fraction of the transport budget a single preload part may use, leaving room for the wrapper. */
 const LUNA_PRELOAD_PART_BUDGET_FRACTION = 0.85;
 
+/**
+ * Maximum preload parts before falling back to collapse. Live smoke found ChatGPT Free stops
+ * acknowledging after ~3 rapid consecutive messages (the 4th part timed out), so a turn that would
+ * need more parts than this is collapsed instead. Override with CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS.
+ */
+export const LUNA_PRELOAD_MAX_PARTS = 3;
+
+export function lunaPreloadMaxParts(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS?.trim();
+  if (!raw) return LUNA_PRELOAD_MAX_PARTS;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 1) return LUNA_PRELOAD_MAX_PARTS;
+  return value;
+}
+
 function splitTextByTokenBudget(text: string, targetTokens: number, modelId?: string): string[] {
   const out: string[] = [];
   let rest = text;
@@ -458,6 +473,7 @@ export function splitLunaPreamble(
   compileMessages: (subset: readonly CodexMessage[]) => CompiledChatGptWebPrompt,
   budgetTokens: number,
   modelId: string,
+  maxParts: number,
 ): LunaPreloadSplit | undefined {
   let finalCompiled: CompiledChatGptWebPrompt | undefined;
   let splitAt = 0;
@@ -472,7 +488,7 @@ export function splitLunaPreamble(
     return undefined; // even the current task plus contracts cannot fit; preload cannot help
   }
   const preamble = chunkMessagesIntoPreamble(messages.slice(0, splitAt), budgetTokens, modelId);
-  if (preamble.length === 0) return undefined;
+  if (preamble.length === 0 || preamble.length > maxParts) return undefined; // too many parts — fall back to collapse
   const preambleTokens = preamble.reduce((sum, chunk) => sum + estimateTokens(chunk, modelId), 0);
   const finalTokens = estimateCompiledChatGptWebInputTokens(finalCompiled, modelId);
   return {
@@ -573,6 +589,7 @@ export function compileLunaBudgetedPrompt(
       subset => compileWith(withMessages(subset)),
       budget,
       parsed.modelId,
+      lunaPreloadMaxParts(),
     );
     if (split) {
       result.compiled = { ...split.finalCompiled, preamble: split.preamble };
