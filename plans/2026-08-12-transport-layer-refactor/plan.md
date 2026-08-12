@@ -73,7 +73,7 @@ context is semantically eligible for preload.
 | 1 | [Transport contract and seams](./phase-01-transport-contract-and-seams.md) | Done |
 | 2 | [Prompt compilation pipeline](./phase-02-prompt-compilation-pipeline.md) | Done (already isolated post-revert) |
 | 3 | [Browser delivery runtime](./phase-03-browser-delivery-runtime.md) | Done (safe scope: preamble mechanics + contract threading) |
-| 4 | [Integration verification and migration](./phase-04-integration-verification-and-migration.md) | Done; live smoke BLOCKED |
+| 4 | [Integration verification and migration](./phase-04-integration-verification-and-migration.md) | Done; live smoke PASSED |
 
 ## Dependencies
 
@@ -93,7 +93,8 @@ context is semantically eligible for preload.
       `edf29f5`, so that clause is void.)
 - [x] Transport tests cover preamble ordering, delivery-failure classification, and plan accounting;
       exact-composer/timeout/replay coverage is unchanged in the existing worker/harness suites.
-- [x] Full test suite (352/0) and `bunx tsc --noEmit` pass. Live preload smoke is BLOCKED (phase 4).
+- [x] Full test suite (352/0) and `bunx tsc --noEmit` pass. Live preload smoke PASSED on the rebuilt
+      container (over-budget Luna turn `8872a9e37ae6` delivered a preamble part + final message).
 
 ## Validation Log
 

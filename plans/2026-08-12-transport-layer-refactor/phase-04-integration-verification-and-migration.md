@@ -81,9 +81,13 @@ The final ownership model is:
 
 - `bunx tsc --noEmit`: clean.
 - Full suite `bun test tests/*.test.ts`: 352 pass, 0 fail.
-- **Live preload smoke: BLOCKED** — no live Luna turn was run against this build; the DOM completion/
-  streaming loop was intentionally not moved, so the mocked contract/harness suites are the evidence,
-  not a live PASS. Rebuild + a real over-budget Luna turn is the outstanding live gate.
+- **Live preload smoke: PASSED (2026-08-12)** — the container was rebuilt from this refactor and a
+  real over-budget Luna turn ran end to end (trace `8872a9e37ae6`, ~28,036 estimated tokens): the
+  budget pipeline split it (`📨 ... 1 earlier-context part(s)`), the new `deliverPreambleParts`
+  delivered `preload part 1/1` and completed `preamble_delivery` (8.0s), the final message
+  (`plan.finalMessage`) was attached and `submission accepted`, and the response streamed back to
+  Codex. No delivery errors; the refactored preamble path + transport-plan threading behave
+  identically live.
 
 ## Success Criteria
 
@@ -92,7 +96,8 @@ The final ownership model is:
 - [x] Focused suites pass.
 - [x] Full test suite passes (352 / 0).
 - [x] `bunx tsc --noEmit` passes.
-- [BLOCKED] Live preload smoke — not run against this build; reported as BLOCKED, not a static PASS.
+- [x] Live preload smoke PASSED — real over-budget Luna turn (`8872a9e37ae6`) delivered a preamble
+      part + final message and streamed back with no delivery errors.
 - [x] Whole-plan consistency sweep reports zero unresolved contradictions.
 
 ## Risk Assessment
