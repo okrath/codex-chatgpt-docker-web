@@ -37,12 +37,6 @@ services:
       # Per-part preload acknowledgement timeout in ms (min 5000). Empty = code default (180000).
       # Lower it only to exercise the delivery-failure fallback quickly in testing.
       CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS:-}"
-      # Off by default until its live smoke passes: lets a full-mode turn answer one scoped research
-      # question in its own Temporary Chat, which spends an extra message per call on the account.
-      # Enable with `CODEX_CHATGPT_WEB_SUBAGENT=on docker compose up -d`.
-      CODEX_CHATGPT_WEB_SUBAGENT: "${CODEX_CHATGPT_WEB_SUBAGENT:-off}"
-      # Per-sub-turn budget in ms, clamped to 15000..240000. Empty = code default (180000).
-      CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS: "${CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS:-}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:17841/healthz"]
       interval: 30s

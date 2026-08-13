@@ -1,10 +1,11 @@
 ---
 phase: 4
-title: "Live smoke and docs"
-status: pending
-effort: "S"
+title: Live smoke and docs
+status: completed
+effort: S
 priority: P2
-dependencies: [3]
+dependencies:
+  - 3
 ---
 
 # Phase 4: Live smoke and docs

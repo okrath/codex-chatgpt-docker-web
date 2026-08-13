@@ -184,28 +184,23 @@ preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3); a turn that would nee
 back to collapse. If a preload delivery fails mid-way, the turn is re-delivered once as a single
 slimmed message, so preload is never worse than collapse.
 
-## Research sub-turns (experimental, off by default)
+## Codex subagents work, and Luna slimming is what makes them fit
 
-Every Codex turn is delivered as one browser message bounded by the account's per-message
-limit, so a turn whose own context already fills that budget has no room to pull in
-anything new. With `CODEX_CHATGPT_WEB_SUBAGENT=on`, a tool-capable turn may answer one
-scoped question in a **second Temporary Chat** — a fresh budget — while it waits on the
-tool call that asked. The answer comes back as an ordinary tool result.
+Codex's own delegation feature runs through this bridge: setup writes `multi_agent = true`
+(and pins `multi_agent_v2 = false`, because V2 encrypts cross-backend task payloads the
+bridge must be able to read). Each subagent Codex spawns is a full Codex task with its own
+turn, so it gets **its own Temporary Chat and its own fresh per-message budget** — and,
+unlike anything the browser side could offer, its own real local tools.
 
-It is entirely optional: the model is told the tool exists and decides for itself. In the
-live smoke it reached for it on 3 of 5 research-shaped tasks and answered unaided on the
-other 2, with a real sub-turn taking about 12 seconds. Bounds: at most 3 per turn, one at
-a time with no queueing, questions capped at 16,000 characters, answers at 32,000. The
-sub-chat gets no Codex tools and no access to your machine; it can use ChatGPT's own web
-search, so treat its findings as data to weigh rather than as instructions, which is what
-the tool result says on its face.
+Verified live on a free Luna account: one task delegated to two subagents produced **three
+concurrent browser turns**, and both subagent turns completed.
 
-**Why it ships disabled.** Every call spends an extra message on your account, and one
-observed sub-turn failure took the parent turn down with it — the model had already
-streamed prose, rewrote it after the error, and the bridge refuses a rewritten block it
-has already sent to Codex. That happened once and could not be reproduced, which is
-exactly why the default waits. Details and what would change it:
-[reports/phase-04-subagent-live-smoke.md](plans/2026-08-13-fail-open-research-subagent-tool/reports/phase-04-subagent-live-smoke.md).
+The catch worth knowing: each subagent turn carries nearly the whole parent context. Both
+arrived at about **32,100 tokens — over ChatGPT Free's ~28,000-token per-message limit** —
+and fit only because Luna slimming dropped the harness-only rule sections first
+(~3,900 tokens), landing them at ~27,900. So on a free account, slimming is not merely a
+long-thread rescue; it is the reason native multi-agent works at all. If you disable it,
+expect delegated turns to be rejected.
 
 ## What this fork changes
 

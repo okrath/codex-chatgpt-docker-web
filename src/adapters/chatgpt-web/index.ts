@@ -8,7 +8,6 @@ import { ChatGptWebAdapterError } from "./adapter-error";
 import { ChatGptBrowserWorker } from "./browser-worker";
 import { extractChatGptTurnEnvironment, extractChatGptTurnIdentity } from "./environment";
 import { CHATGPT_LUNA_BROWSER_INPUT_TOKEN_BUDGET } from "./input-tokens";
-import { chatGptSubagentEnabled, type ResearchSubTurnAnswer } from "./research-subagent";
 import {
   compileLunaBudgetedPrompt,
   describeLunaOverflowSuggestions,
@@ -364,25 +363,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
     const token = deferred<string>();
     let tokenSettled = false;
     let activeToken: string | undefined;
-    let researchSubagentCall = 0;
-    /**
-     * Runs the sub-turn and lets failures throw: the broker turns them into tool results, because
-     * it is also the place that decides whether a failed attempt was charged against the turn's cap.
-     * Nothing here reaches the parent turn's own outcome, which is the point — a sub-chat must never
-     * be able to fail the turn that asked, or Codex re-delivers the whole thing.
-     */
-    const runResearchSubagentForTurn = (question: string): Promise<ResearchSubTurnAnswer> => {
-      researchSubagentCall += 1;
-      return worker.runResearchSubTurn({
-        parentTraceId: traceId,
-        index: researchSubagentCall,
-        question,
-        modelId: parsed.modelId,
-        reasoning: parsed.options.reasoning,
-        capabilities: turnCapabilities,
-        abortSignal: browserAbort.signal,
-      });
-    };
     const browser = finalizeCheckpoint(worker.run({
       traceId,
       modelId: parsed.modelId,
@@ -406,7 +386,6 @@ export function createChatGptWebAdapter(provider: CodexProviderConfig): Provider
           const recallHistory = [...checkpointReplacedHistory, ...(lastBudgetedCompilation?.removedHistory ?? [])]
             .map((message, index) => ({ ...message, index }));
           if (recallHistory.length > 0) broker.attachCollapsedHistory(turnToken, recallHistory);
-          if (chatGptSubagentEnabled()) broker.attachResearchSubagent(turnToken, runResearchSubagentForTurn);
           return { ...compiled, release: () => {} };
         } catch (error) {
           broker.revoke(turnToken);

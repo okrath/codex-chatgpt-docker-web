@@ -4,7 +4,7 @@ description: >-
   Let the main Web-model turn spawn a scoped research sub-turn in a second
   Temporary Chat via an optional broker tool — each sub-chat brings a fresh ~28k
   transport budget.
-status: pending
+status: completed
 priority: P2
 branch: main
 tags:
@@ -20,6 +20,36 @@ source: skill
 ---
 
 # Fail-open research subagent tool for ChatGPT Web turns
+
+> **WITHDRAWN 2026-08-13, hours after phase 4 shipped it disabled. The code is deleted.**
+>
+> The feature was redundant, and the evidence was in this repository the whole time.
+> Codex has its own delegation mechanism, and this fork's own setup already enables it —
+> `multi_agent = true`, with `multi_agent_v2 = false` so the bridge can read cross-backend
+> payloads ([src/codex-integration.ts](../../src/codex-integration.ts)). Upstream's
+> architecture doc calls the result a "routed Web subagent", and `index.ts` already had a
+> branch rejecting V2 payloads for exactly this scenario.
+>
+> Confirmed live before deleting anything: one delegated task produced **three concurrent
+> browser turns** (parent plus two subagents, traces `fbe9ef26614b`, `8a6519803b35`,
+> `78af1f2cf743`), and both subagent turns completed. Every payoff this plan chased — a
+> separate chat, a fresh per-message budget — is already there, and a Codex subagent is a
+> full agent with real local tools rather than a browser-only research chat.
+>
+> **The process failure worth remembering:** the plan asked "what problem does this solve"
+> and answered it correctly, but never asked "has the platform already solved it". One grep
+> for `multi_agent` at the start would have closed the plan on day one. Same shape as the
+> Floor: a sound mechanism built on an unexamined premise.
+>
+> One genuine difference is recorded rather than acted on: a native subagent copies nearly
+> the whole parent context (measured ~32.1k tokens, needing slimming to fit), while the
+> deleted sub-chat sent ~1.4k. If a cheap-question niche is ever demonstrated rather than
+> assumed, the implementation is in git history at commits `10cb099`, `ce662c4`, `baa9e97`.
+>
+> Kept from the work: the probe findings in `reports/` are all still true and load-bearing
+> — pending connector calls are safe to at least 300 s, and Chromium's anti-throttling flags
+> mean a second tab cannot starve the parent. And the smoke turned up the fact now in the
+> README: on a free account, **Luna slimming is what makes native multi-agent fit at all**.
 
 ## Overview
 
@@ -69,7 +99,7 @@ only way to multiply usable context per Codex turn on the Free tier.
 | 1 | [Live feasibility probes](./phase-01-live-feasibility-probes.md) | Completed |
 | 2 | [Sub-chat delivery machinery](./phase-02-sub-chat-delivery-machinery.md) | Completed |
 | 3 | [Broker tool and turn integration](./phase-03-broker-tool-and-turn-integration.md) | Completed |
-| 4 | [Live smoke and docs](./phase-04-live-smoke-and-docs.md) | Pending |
+| 4 | [Live smoke and docs](./phase-04-live-smoke-and-docs.md) | Completed |
 
 Phase 1 is a **gate**: if probe A fails (no second chat while a tool call is
 pending), the design falls back to running the sub-chat *between* rounds rather
