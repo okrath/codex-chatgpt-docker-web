@@ -31,6 +31,8 @@ import { toChatGptWebTransportPlan, type PreparedChatGptWebPrompt } from "./tran
 import { deliverPreambleParts } from "./browser-transport";
 import {
   buildResearchSubTurnPrompt,
+  RESEARCH_SUBAGENT_MAX_QUEUE_DEPTH,
+  ResearchSubagentBusyError,
   resolveResearchSubTurnTimeoutMs,
   shapeResearchSubTurnAnswer,
   SerialQueue,
@@ -1203,6 +1205,14 @@ export class ChatGptBrowserWorker {
     if (this.config.browserHost === "launcher") {
       throw new Error("Research sub-turns require the managed browser host");
     }
+    // One queue serves every concurrent turn, so a deep backlog would strand this caller behind
+    // unrelated work while its own connector call stays pending. Refusing now is the fail-open
+    // answer: the model writes its answer unaided instead of waiting for one that arrives too late.
+    if (this.researchSubTurns.depth >= RESEARCH_SUBAGENT_MAX_QUEUE_DEPTH) {
+      throw new ResearchSubagentBusyError(
+        "Another research sub-turn is already running; answer without one rather than waiting.",
+      );
+    }
     const prompt = buildResearchSubTurnPrompt(request.question);
     const timeoutMs = resolveResearchSubTurnTimeoutMs(request.timeoutMs);
     const traceId = `${request.parentTraceId}-sub${request.index}`;
@@ -1220,7 +1230,11 @@ export class ChatGptBrowserWorker {
     this.assertResearchSubTurnLive(request.abortSignal);
     const diagnostics = new ChatGptBrowserDiagnostics(traceId);
     console.info(`[chatgpt-web] research sub-turn ${traceId} opened (promptChars=${prompt.length})`);
-    const page = await this.pageForNewTurn();
+    // Bounded like the main path's page acquisition: a wedged browser here would hang the parent's
+    // pending connector call with nothing to time it out, and hold the queue shut behind it.
+    const page = await this.runStage(traceId, "sub_browser_page", browserStageTimeouts.browserPage, () => (
+      this.pageForNewTurn()
+    ));
     try {
       await this.runStage(traceId, "sub_chat_preparation", browserStageTimeouts.temporaryChatPreparation, async () => {
         await this.prepareTemporaryChatSurface(page, checkpoint => diagnostics.capture(page, checkpoint));

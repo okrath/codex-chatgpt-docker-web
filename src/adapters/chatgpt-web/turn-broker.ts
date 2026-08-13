@@ -16,6 +16,15 @@ import {
   type CollapsedHistorySearchMatch,
   type RemovedHistoryMessage,
 } from "./history-recall";
+import {
+  assertResearchQuestionAcceptable,
+  describeResearchSubagentFailure,
+  RESEARCH_SUBAGENT_MAX_CALLS_PER_TURN,
+  RESEARCH_SUBAGENT_RESULT_NOTE,
+  ResearchSubagentBusyError,
+  type ResearchSubagentOutcome,
+  type ResearchSubagentRunner,
+} from "./research-subagent";
 
 interface PendingTurn extends ChatGptTurnEnvironment {
   expiresAt?: number;
@@ -58,12 +67,14 @@ interface TurnChannel {
   waiters: Set<ToolWaiter>;
   batchTimer?: ReturnType<typeof setTimeout>;
   collapsedHistory?: RemovedHistoryMessage[];
+  researchSubagent?: ResearchSubagentRunner;
+  researchSubagentCalls: number;
   finalized?: boolean;
 }
 
 interface BrokerRequest {
   id: string;
-  method: "claim" | "resolve" | "release" | "invoke" | "search_history" | "load_history";
+  method: "claim" | "resolve" | "release" | "invoke" | "search_history" | "load_history" | "research_subagent";
   token?: string;
   bindingId?: string;
   wireName?: string;
@@ -73,6 +84,7 @@ interface BrokerRequest {
   query?: string;
   limit?: number;
   indexes?: number[];
+  question?: string;
 }
 
 interface BrokerResponse {
@@ -170,6 +182,7 @@ export class TurnBroker {
       queuedCallIds: [],
       invocations: new Map(),
       waiters: new Set(),
+      researchSubagentCalls: 0,
     };
     this.channels.set(token, channel);
     this.pending.set(token, channel);
@@ -245,6 +258,18 @@ export class TurnBroker {
     channel.collapsedHistory = messages;
   }
 
+  /**
+   * Let this turn answer scoped research questions in their own Temporary Chats. Optional by
+   * design: a turn without a runner attached simply refuses the wire name, which is what the
+   * feature flag being off looks like from the model's side.
+   */
+  attachResearchSubagent(token: string, runner: ResearchSubagentRunner): void {
+    const channel = this.channels.get(token);
+    if (!channel) throw new Error("turn token is invalid or expired");
+    if (channel.researchSubagent) throw new Error("A research subagent is already attached for this turn");
+    channel.researchSubagent = runner;
+  }
+
   finalize(token: string): void {
     this.prune();
     const channel = this.channels.get(token);
@@ -263,6 +288,7 @@ export class TurnBroker {
     }
     this.retire(this.retiredTokens, token, channel.traceId);
     channel.collapsedHistory = undefined;
+    channel.researchSubagent = undefined;
     this.rejectChannel(channel, new Error("Codex turn binding was revoked"));
   }
 
@@ -424,8 +450,60 @@ export class TurnBroker {
       && request.method !== "release"
       && request.method !== "invoke"
       && request.method !== "search_history"
-      && request.method !== "load_history") {
+      && request.method !== "load_history"
+      && request.method !== "research_subagent") {
       throw new Error("turn broker method is invalid");
+    }
+  }
+
+  /**
+   * Answer one scoped research question in its own chat, or say why not.
+   *
+   * Everything here returns a value rather than throwing: this result becomes a tool result the
+   * model reads and reasons about, and a sub-chat that could not answer must never be able to fail
+   * the turn that asked for it. The per-turn cap counts attempts, not successes — a failed sub-chat
+   * has already spent a message on the account.
+   */
+  private async runResearchSubagent(channel: TurnChannel, question: unknown): Promise<ResearchSubagentOutcome> {
+    const runner = channel.researchSubagent;
+    if (!runner) {
+      return { ok: false, error: "Research sub-turns are not enabled for this turn." };
+    }
+    let accepted: string;
+    try {
+      // Before the reservation: a question that was never sent must not cost an attempt.
+      accepted = assertResearchQuestionAcceptable(question);
+    } catch (error) {
+      return { ok: false, error: describeResearchSubagentFailure(error) };
+    }
+    if (channel.researchSubagentCalls >= RESEARCH_SUBAGENT_MAX_CALLS_PER_TURN) {
+      return {
+        ok: false,
+        error: `This turn has already used its ${RESEARCH_SUBAGENT_MAX_CALLS_PER_TURN} research sub-turns; answer with what you have.`,
+      };
+    }
+    // Reserve synchronously so parallel calls in one model response cannot all pass the check, then
+    // release again if nothing was actually spent.
+    channel.researchSubagentCalls += 1;
+    const attempt = channel.researchSubagentCalls;
+    console.info(
+      `[chatgpt-web] broker trace=${channel.traceId} research sub-turn ${attempt}/${RESEARCH_SUBAGENT_MAX_CALLS_PER_TURN} requested (questionChars=${accepted.length})`,
+    );
+    try {
+      const { answer, truncated } = await runner(accepted);
+      console.info(
+        `[chatgpt-web] broker trace=${channel.traceId} research sub-turn ${attempt} answered (chars=${answer.length})`,
+      );
+      return { ok: true, answer, truncated, note: RESEARCH_SUBAGENT_RESULT_NOTE };
+    } catch (error) {
+      // A refusal from the queue never opened a chat, so it costs nothing. Anything else may have
+      // sent a message before failing, and the account was charged for it either way.
+      if (error instanceof ResearchSubagentBusyError) channel.researchSubagentCalls -= 1;
+      const described = describeResearchSubagentFailure(error);
+      console.info(
+        `[chatgpt-web] broker trace=${channel.traceId} research sub-turn ${attempt} failed: ${described}`,
+      );
+      return { ok: false, error: described };
     }
   }
 
@@ -533,6 +611,13 @@ export class TurnBroker {
       return { released: true };
     }
     if (request.method === "resolve") return { environment: binding.channel.environment };
+
+    if (request.method === "research_subagent") {
+      if (binding.channel.finalized) throw new Error("Codex turn is already finalized");
+      // dispatch is sync-or-promise by design; the caller awaits, so the sub-turn's minutes of work
+      // do not block any other broker request.
+      return this.runResearchSubagent(binding.channel, request.question);
+    }
 
     if (request.method === "search_history" || request.method === "load_history") {
       if (binding.channel.finalized) throw new Error("Codex turn is already finalized");

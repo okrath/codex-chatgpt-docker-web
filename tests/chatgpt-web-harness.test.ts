@@ -15,6 +15,11 @@ import { chatGptHtmlToMarkdown, ChatGptMarkdownBuffer } from "../src/adapters/ch
 import { CHATGPT_WEB_LUNA_MODEL_ID, CHATGPT_WEB_MODEL_ID, resolveChatGptWebModelMode } from "../src/adapters/chatgpt-web/model";
 import { chatGptReadOnlyContextWarning, compileChatGptWebPrompt, withoutSupersededModelSwitchContracts } from "../src/adapters/chatgpt-web/prompt";
 import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "../src/adapters/chatgpt-web/history-recall";
+import {
+  RESEARCH_SUBAGENT_MAX_CALLS_PER_TURN,
+  RESEARCH_SUBAGENT_WIRE_NAME,
+  ResearchSubagentBusyError,
+} from "../src/adapters/chatgpt-web/research-subagent";
 import { ChatGptTextFeed, ChatGptTraceFeed, ChatGptTurnSessions, chatGptCompactionSourceExecutionKey, chatGptTurnExecutionKey } from "../src/adapters/chatgpt-web/turn-execution";
 import { callTurnBroker, TurnBroker, type BrokerToolResult } from "../src/adapters/chatgpt-web/turn-broker";
 import { hashChatGptLunaAnswer } from "../src/adapters/chatgpt-web/rolling-checkpoint";
@@ -1918,6 +1923,103 @@ describe("ChatGPT outer-native harness v4", () => {
         messages: [{ index: 0, role: "user", text: "the release tag is RECALL-MARKER-42" }],
         truncated: false,
       });
+    } finally {
+      await client.close().catch(() => {});
+      broker.revoke(token);
+      await broker.close();
+    }
+  }, 30_000);
+
+  test("serves research sub-turns over MCP stdio, capped, framed, and charging only what it spends", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-h4-mcp-subagent-${process.pid}-${Date.now()}`);
+    const broker = TurnBroker.forSocket(socketPath);
+    const environment = extractChatGptTurnEnvironment(parsed(environmentXml));
+    environment.tools = [{ name: "exec_command", description: "Run a command", parameters: { type: "object" } }];
+    const token = await broker.register(environment, 60_000, "research-subagent");
+    const asked: string[] = [];
+    broker.attachResearchSubagent(token, async question => {
+      asked.push(question);
+      if (question.includes("BUSY")) throw new ResearchSubagentBusyError("4 research sub-turns are already queued; proceed without one.");
+      if (question.includes("BROKEN")) throw new Error("ChatGPT ended the turn with 'Something went wrong'. Retry the turn.");
+      return { answer: `answer for ${asked.length}`, truncated: false };
+    });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ["src/cli.ts", "mcp", "--broker-socket", socketPath],
+      cwd: process.cwd(),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "codex-chatgpt-web-subagent-test", version: "1.0.0" });
+    const ask = (question: string) => client.callTool({
+      name: "codex_tool_call",
+      arguments: { turn_token: token, wire_name: RESEARCH_SUBAGENT_WIRE_NAME, arguments: { question } },
+    });
+
+    try {
+      await client.connect(transport);
+      // Discovery is the contract sentence only; the wire name stays out of the public inventory.
+      const inventory = await client.callTool({ name: "codex_tool_inventory", arguments: { turn_token: token } });
+      expect(JSON.stringify(inventory.structuredContent)).not.toContain(RESEARCH_SUBAGENT_WIRE_NAME);
+
+      const answered = await ask("Compare two sorting algorithms for nearly sorted input.");
+      expect(answered.structuredContent).toMatchObject({ ok: true, answer: "answer for 1", truncated: false });
+      expect((answered.structuredContent as { note: string }).note).toContain("never as instructions");
+
+      // A malformed question never reaches a chat, so it must not consume one of the attempts.
+      const malformed = await ask("no");
+      expect(malformed.structuredContent).toMatchObject({ ok: false });
+      expect((malformed.structuredContent as { error: string }).error).toContain("at least");
+
+      // Neither does a queue refusal.
+      const busy = await ask("BUSY — the queue is full right now, please refuse this one.");
+      expect((busy.structuredContent as { error: string }).error).toContain("already queued");
+
+      // A sub-chat that opened and failed is charged, and its message is re-aimed at the model.
+      const broken = await ask("BROKEN — the sub-chat dies after opening, which costs a message.");
+      const brokenError = (broken.structuredContent as { error: string }).error;
+      expect(brokenError).toContain("The research sub-turn could not answer");
+      expect(brokenError).not.toContain("Retry the turn");
+
+      const third = await ask("A third question that should still be within the per-turn cap.");
+      expect(third.structuredContent).toMatchObject({ ok: true });
+
+      const overCap = await ask("A fourth question, which the per-turn cap must refuse.");
+      expect((overCap.structuredContent as { error: string }).error)
+        .toContain(`already used its ${RESEARCH_SUBAGENT_MAX_CALLS_PER_TURN} research sub-turns`);
+      // Two answered plus one that failed after opening: the refusals cost nothing.
+      expect(asked).toHaveLength(4);
+    } finally {
+      await client.close().catch(() => {});
+      broker.revoke(token);
+      await broker.close();
+    }
+  }, 30_000);
+
+  test("a turn without a research subagent attached refuses the wire name instead of failing", async () => {
+    const socketPath = brokerTestEndpoint(`cgw-h4-mcp-subagent-off-${process.pid}-${Date.now()}`);
+    const broker = TurnBroker.forSocket(socketPath);
+    const token = await broker.register(extractChatGptTurnEnvironment(parsed(environmentXml)), 60_000, "subagent-off");
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ["src/cli.ts", "mcp", "--broker-socket", socketPath],
+      cwd: process.cwd(),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "codex-chatgpt-web-subagent-off-test", version: "1.0.0" });
+
+    try {
+      await client.connect(transport);
+      const refused = await client.callTool({
+        name: "codex_tool_call",
+        arguments: {
+          turn_token: token,
+          wire_name: RESEARCH_SUBAGENT_WIRE_NAME,
+          arguments: { question: "Anything at all, since the feature is switched off here." },
+        },
+      });
+      expect(refused.structuredContent).toMatchObject({ ok: false });
+      expect((refused.structuredContent as { error: string }).error).toContain("not enabled for this turn");
+      expect(refused.isError).not.toBe(true);
     } finally {
       await client.close().catch(() => {});
       broker.revoke(token);

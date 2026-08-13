@@ -45,6 +45,19 @@ this repository can reach, because the worker has no DOM double.
    observe still sees an empty snapshot.
 7. **Storage-state hygiene.** The sub Temporary Chat must leave no history entry
    and no changed model preference in the persisted state.
+8. **How long a real sub-turn takes**, including one that searches the web. The
+   180 s default and 240 s cap were derived from what is safe, never from what
+   is needed; measure the distribution and retune.
+9. **Total pending-call duration of the parent** while a sub-turn runs, against
+   the 300 s that probe C actually verified. Refusing to queue keeps the worst
+   case at one sub-turn's runtime, but only a live run confirms it.
+10. **Abort on revoke.** A parent that finishes while its sub-turn still runs
+    leaves that chat generating; today only cancellation stops it. Watch for an
+    orphan sub-chat after a completed turn and decide whether `revoke()` must
+    abort in flight.
+11. **Diagnostics retention.** Each sub-turn takes one of the ten retained trace
+    directories; confirm the parent's own directory survives a 3-sub-turn turn,
+    or nest sub-turn artifacts under it.
 
 ## Live smoke scenarios
 

@@ -17,3 +17,4 @@ references/
 launcher/build/
 launcher/release/
 launcher/artifacts/
+.claude/worktrees/

@@ -6,6 +6,11 @@ import { namespacedToolName, type CodexTool } from "../../types";
 import type { ChatGptTurnEnvironment } from "./environment";
 import { HISTORY_LOAD_WIRE_NAME, HISTORY_SEARCH_WIRE_NAME } from "./history-recall";
 import {
+  RESEARCH_SUBAGENT_QUESTION_MAX_CHARS,
+  RESEARCH_SUBAGENT_WIRE_NAME,
+  type ResearchSubagentOutcome,
+} from "./research-subagent";
+import {
   callTurnBroker,
   type BrokerToolResult,
 } from "./turn-broker";
@@ -370,6 +375,26 @@ export async function runChatGptMcpServer(options: { brokerSocketPath: string })
           ...(limit === undefined ? {} : { limit: typeof limit === "number" ? limit : Number.NaN }),
         }, invocationTimeout(claimed.environment));
         return result({ ...found });
+      }
+      if (wire_name === RESEARCH_SUBAGENT_WIRE_NAME) {
+        if (input !== undefined) throw new Error(`${RESEARCH_SUBAGENT_WIRE_NAME} does not accept freeform input`);
+        const question = args?.question;
+        if (typeof question !== "string") throw new Error(`${RESEARCH_SUBAGENT_WIRE_NAME} requires a string question argument`);
+        // Bounded here as well as in the broker so an oversized question is refused before it
+        // crosses the socket; the shared arguments schema places no limit of its own.
+        if (question.length > RESEARCH_SUBAGENT_QUESTION_MAX_CHARS) {
+          throw new Error(
+            `${RESEARCH_SUBAGENT_WIRE_NAME} accepts at most ${RESEARCH_SUBAGENT_QUESTION_MAX_CHARS.toLocaleString("en-US")} characters; ask a narrower question`,
+          );
+        }
+        // No invocation timeout: the sub-turn owns its own budget, and cutting the socket early
+        // would strand a chat that is still generating with nothing to close it.
+        const outcome = await callTurnBroker<ResearchSubagentOutcome>(options.brokerSocketPath, {
+          method: "research_subagent",
+          bindingId: claimed.bindingId,
+          question,
+        }, null);
+        return result({ ...outcome });
       }
       if (wire_name === HISTORY_LOAD_WIRE_NAME) {
         if (input !== undefined) throw new Error(`${HISTORY_LOAD_WIRE_NAME} does not accept freeform input`);

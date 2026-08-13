@@ -5,10 +5,13 @@ import {
   RESEARCH_SUBAGENT_TIMEOUT_CAP_MS,
   RESEARCH_SUBAGENT_TIMEOUT_FLOOR_MS,
   RESEARCH_SUBAGENT_TIMEOUT_MS,
+  ResearchSubagentBusyError,
   ResearchSubagentRequestError,
   SerialQueue,
   SerialQueueClosedError,
   buildResearchSubTurnPrompt,
+  chatGptSubagentEnabled,
+  describeResearchSubagentFailure,
   resolveResearchSubTurnTimeoutMs,
   shapeResearchSubTurnAnswer,
 } from "../src/adapters/chatgpt-web/research-subagent";
@@ -68,6 +71,69 @@ test("an oversized answer is capped and flagged rather than silently cut", () =>
   const long = shapeResearchSubTurnAnswer("y".repeat(RESEARCH_SUBAGENT_ANSWER_CHAR_CAP + 500));
   expect(long.truncated).toBe(true);
   expect(long.answer).toHaveLength(RESEARCH_SUBAGENT_ANSWER_CHAR_CAP);
+});
+
+test("the tool ships disabled and only explicit on values enable it", () => {
+  expect(chatGptSubagentEnabled({})).toBe(false);
+  expect(chatGptSubagentEnabled({ CODEX_CHATGPT_WEB_SUBAGENT: "" })).toBe(false);
+  expect(chatGptSubagentEnabled({ CODEX_CHATGPT_WEB_SUBAGENT: "off" })).toBe(false);
+  expect(chatGptSubagentEnabled({ CODEX_CHATGPT_WEB_SUBAGENT: "maybe" })).toBe(false);
+  for (const value of ["on", "1", "true", "ON", " On "]) {
+    expect(chatGptSubagentEnabled({ CODEX_CHATGPT_WEB_SUBAGENT: value }), value).toBe(true);
+  }
+});
+
+test("failures reach the model as guidance, never as instructions it cannot follow", () => {
+  // Every string below is copied verbatim from browser-worker.ts, because a regex that strips an
+  // invented message proves only that it compiles.
+  expect(describeResearchSubagentFailure(
+    new Error("ChatGPT rate limit: too many requests are being made too quickly. Wait before retrying."),
+  )).toBe("The research sub-turn could not answer: ChatGPT rate limit: too many requests are being made too quickly. Continue without it.");
+
+  expect(describeResearchSubagentFailure(
+    new Error("ChatGPT ended the turn with 'Something went wrong'. Retry the turn."),
+  )).not.toMatch(/Retry the turn/);
+
+  expect(describeResearchSubagentFailure(
+    new Error("ChatGPT could not load the account subscription. Reload ChatGPT inside the launcher and retry; sign out only if the error persists."),
+  )).not.toMatch(/launcher/);
+
+  // Sentences stay sentences: no run-ons where the helper's message lacks final punctuation.
+  expect(describeResearchSubagentFailure(new Error("ChatGPT browser stage timed out: sub_send")))
+    .toBe("The research sub-turn could not answer: ChatGPT browser stage timed out: sub_send. Continue without it.");
+
+  // Messages already written for the model are passed through unchanged.
+  expect(describeResearchSubagentFailure(new ResearchSubagentBusyError("4 research sub-turns are already queued; proceed without one.")))
+    .toBe("4 research sub-turns are already queued; proceed without one.");
+  expect(describeResearchSubagentFailure(new ResearchSubagentRequestError("A research question must not contain </research_question>.")))
+    .toBe("A research question must not contain </research_question>.");
+
+  const aborted = new Error("Research sub-turn aborted");
+  aborted.name = "AbortError";
+  expect(describeResearchSubagentFailure(aborted)).toContain("cancelled");
+});
+
+test("the queue reports its depth so a backlog can be refused rather than joined", async () => {
+  const queue = new SerialQueue();
+  expect(queue.depth).toBe(0);
+
+  // One gate for both tasks: the second never starts until the first finishes, so its own resolver
+  // would be unreachable from out here.
+  let open = (): void => {};
+  const gate = new Promise<void>(resolve => { open = resolve; });
+  const blocked = [0, 1].map(() => queue.run(() => gate));
+  expect(queue.depth).toBe(2);
+
+  open();
+  await Promise.all(blocked);
+  expect(queue.depth).toBe(0);
+});
+
+test("a rejected sub-turn releases its queue slot", async () => {
+  // The one leak that would wedge the feature into permanent busy refusals.
+  const queue = new SerialQueue();
+  await expect(queue.run(async () => { throw new Error("sub-chat died"); })).rejects.toThrow();
+  expect(queue.depth).toBe(0);
 });
 
 test("queued sub-turns run one at a time, in the order they were queued", async () => {

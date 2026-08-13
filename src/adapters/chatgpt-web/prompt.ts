@@ -5,6 +5,7 @@ import {
   CHATGPT_LUNA_CHECKPOINT_MARKER,
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
 } from "./rolling-checkpoint";
+import { chatGptSubagentEnabled, RESEARCH_SUBAGENT_WIRE_NAME } from "./research-subagent";
 
 export interface ChatGptWebPromptImage {
   ref: string;
@@ -243,6 +244,13 @@ export function compileChatGptWebPrompt(
     ? [
       "For local work required by the task, use the attached Codex Native tools directly according to their declared descriptions and schemas.",
       "Use actual Codex Native results as evidence for local observations and effects, and keep calling tools until the requested work is complete and verified.",
+      // Fail-open, exactly like the collapsed-history recall tools: an offer the model may ignore,
+      // never a step it must take. The one shape that has worked live for model-directed calls.
+      ...(chatGptSubagentEnabled()
+        ? [
+          `When answering genuinely needs focused research this context cannot supply — weighing an unfamiliar algorithm, checking an external fact, reading up on an API — you MAY call codex_tool_call with wire_name ${RESEARCH_SUBAGENT_WIRE_NAME} ({"question":"…"}). Ask one self-contained question, quoting whatever context it needs, because that chat sees nothing of this task. The reply comes back as an ordinary tool result. It is optional: skip it whenever you can already answer, and continue without it if it reports an error.`,
+        ]
+        : []),
     ]
     : [
       `This is ChatGPT Web ${mode.displayLabel} with no Codex Native bridge to the user's local computer attached to this response. This restriction applies only to local Codex files, commands, processes, and computer mutations.`,

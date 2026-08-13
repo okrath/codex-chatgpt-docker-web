@@ -386,6 +386,59 @@ test("uses the public Instant name without leaking the browser menu alias into t
 
 
 
+function withSubagentFlag<T>(value: string | undefined, body: () => T): T {
+  const previous = process.env.CODEX_CHATGPT_WEB_SUBAGENT;
+  if (value === undefined) delete process.env.CODEX_CHATGPT_WEB_SUBAGENT;
+  else process.env.CODEX_CHATGPT_WEB_SUBAGENT = value;
+  try {
+    return body();
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_CHATGPT_WEB_SUBAGENT;
+    else process.env.CODEX_CHATGPT_WEB_SUBAGENT = previous;
+  }
+}
+
+test("the research subagent is invisible until it is switched on", () => {
+  const compiled = withSubagentFlag(undefined, () => compileChatGptWebPrompt(
+    request("high"),
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    "turn_12345678901234567890123456789012",
+  ));
+
+  expect(compiled.text).not.toContain("__codex_research_subagent_v1");
+  expect(compiled.text).not.toContain("focused research this context cannot supply");
+});
+
+test("switched on, tool-capable turns are offered the subagent as an option they may ignore", () => {
+  const compiled = withSubagentFlag("on", () => compileChatGptWebPrompt(
+    request("high"),
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    "turn_12345678901234567890123456789012",
+  ));
+
+  expect(compiled.text).toContain("__codex_research_subagent_v1");
+  expect(compiled.text).toContain("you MAY call codex_tool_call");
+  expect(compiled.text).toContain("It is optional");
+  expect(compiled.text).toContain("continue without it if it reports an error");
+  // The offer must not become an obligation, and must not contradict any other contract line.
+  expect(compiled.text).not.toMatch(/you must call codex_tool_call with wire_name __codex_research/i);
+});
+
+test("read-only and compaction turns are never offered the subagent, even switched on", () => {
+  const readOnly = withSubagentFlag("on", () => compileChatGptWebPrompt(
+    request("max"),
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+  ));
+  const compaction = withSubagentFlag("on", () => {
+    const compact = request("high");
+    compact._compactionRequest = true;
+    return compileChatGptWebPrompt(compact, { localToolsEnabled: false, solAvailable: true, proAvailable: true });
+  });
+
+  expect(readOnly.text).not.toContain("__codex_research_subagent_v1");
+  expect(compaction.text).not.toContain("__codex_research_subagent_v1");
+});
+
 test("keeps large contexts intact in the inline text envelope", () => {
   const token = "turn_12345678901234567890123456789012";
   const largeContent = "x".repeat(600_000);
