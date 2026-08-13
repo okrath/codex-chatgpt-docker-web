@@ -37,10 +37,6 @@ services:
       # Per-part preload acknowledgement timeout in ms (min 5000). Empty = code default (180000).
       # Lower it only to exercise the delivery-failure fallback quickly in testing.
       CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS: "${CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS:-}"
-      # On by default: attach the sealed Floor procedure contract to Web turns. Set to off to ship
-      # turns without it — the kill-switch if it is ever implicated in a failure, and the control
-      # arm for measuring its effect: `CODEX_CHATGPT_WEB_FLOOR=off docker compose up -d`.
-      CODEX_CHATGPT_WEB_FLOOR: "${CODEX_CHATGPT_WEB_FLOOR:-on}"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:17841/healthz"]
       interval: 30s
