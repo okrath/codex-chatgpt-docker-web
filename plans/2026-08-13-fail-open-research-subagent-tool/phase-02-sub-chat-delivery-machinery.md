@@ -38,8 +38,10 @@ turn's completion watcher.
 - Diagnostics: reuse the browser-turn diagnostics writer with a distinct trace
   suffix (`<parentTrace>-sub<N>`), so live smokes can be audited the same way
   as main turns.
-- Timeout: default from Probe C's measured bound; abort closes the page and
-  returns the typed failure.
+- Timeout: **180 s default, 240 s hard cap** (Probe C's original 90/120 s
+  figure was withdrawn — no failure threshold exists between 120 s and 300 s;
+  see the report's correction). The timeout bounds a stuck sub-chat; it is not
+  protecting the parent turn, which tolerates long waits.
 - The main turn's watcher keeps polling its own page unaffected (separate
   `Page` objects). Guard: while a sub-turn runs, the worker must not treat the
   new page's DOM events as main-turn evidence — sub-turn logic operates only on

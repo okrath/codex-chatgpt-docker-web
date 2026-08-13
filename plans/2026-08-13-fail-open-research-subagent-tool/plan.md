@@ -107,16 +107,20 @@ path. No schema, storage, or transport-plan changes.
 
 ## Unresolved questions
 
-- ~~Probe C bounds the per-sub-agent timeout~~ **Measured 2026-08-13** (see
-  [reports/phase-01-subagent-feasibility-probes.md](./reports/phase-01-subagent-feasibility-probes.md)):
-  a 5-minute pending connector call left the parent chat in a *"Connection
-  interrupted"* state and the turn failed its completion watch across clean
-  retries. Sub-agent timeout is therefore **default 90 s, hard cap 120 s** —
-  the 240 s guess is dead. A question needing more time must be split by the
-  caller.
+- ~~Probe C bounds the per-sub-agent timeout~~ **Resolved 2026-08-13, and the
+  first answer was wrong.** The incident that produced the "90 s / 120 s cap"
+  had no long pending call in it at all; controlled holds found **no failure
+  threshold between 120 s and 300 s**, so the pending-call window is not the
+  constraint. Sub-agent timeout is **180 s default / 240 s hard cap**, chosen
+  as a bound on a stuck sub-chat rather than as protection for the parent. See
+  the correction in
+  [reports/phase-01-subagent-feasibility-probes.md](./reports/phase-01-subagent-feasibility-probes.md)
+  and the full reconstruction in
+  `plans/2026-08-13-long-exec-connection-interruption/`.
 - Whether one research tool is enough or task-shaped variants (read-source vs
   web-research) earn their place — deferred until real usage shows a need.
-- Separate production issue surfaced by the probe, independent of subagents:
-  minutes-long local execs already destabilize the parent chat on today's
-  product (interrupted stream → completion action never rendered → retry
-  churn). Needs its own investigation.
+- **Checkpoint omission is the live reliability problem** (measured 6/10 on
+  short answers) and it is what arms the retry storm that kills turns. It is
+  not caused by this plan, but a sub-agent tool result makes the parent's
+  answer longer and more structured, which may interact with it either way.
+  Worth re-measuring once sub-agent turns exist.
