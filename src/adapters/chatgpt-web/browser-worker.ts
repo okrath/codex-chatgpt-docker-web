@@ -61,6 +61,8 @@ import { LauncherBrowserHelperClient } from "./launcher-helper-client";
 import { MAX_CHATGPT_BROWSER_TABS } from "./concurrency";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import {
+  captureChatGptLunaCheckpointFromRepair,
+  CHATGPT_LUNA_CHECKPOINT_MARKER,
   ChatGptLunaCheckpointStream,
   type CapturedChatGptLunaCheckpoint,
 } from "./rolling-checkpoint";
@@ -255,6 +257,24 @@ export const CHATGPT_PROMPT_INSERT_CHUNK_CHARS = 100_000;
 export const CHATGPT_COMPOSER_DOCUMENT_END_KEY = process.platform === "darwin"
   ? "Meta+ArrowDown"
   : "Control+End";
+
+/**
+ * Asked in the same chat when the answer arrived without its private checkpoint tail. Deliberately
+ * narrow: it must not invite a new answer, because the answer has already been streamed to Codex and
+ * cannot be replaced.
+ */
+export const CHATGPT_LUNA_CHECKPOINT_REPAIR_PROMPT = [
+  "Your previous message was delivered to the caller, but it omitted the required private rolling checkpoint.",
+  "Do not answer the task again and do not repeat or revise that answer.",
+  `Reply with only the exact marker ${CHATGPT_LUNA_CHECKPOINT_MARKER} on its own line, followed by the checkpoint for that answer and nothing else.`,
+  "Use the same headings as before, each on its own line with concise dash bullets under the list headings: Objective:, Decisions:, Files touched:, Learned facts:, Open work:.",
+].join("\n");
+
+/** One attempt only: a second would spend another message against the account's rapid-message limit. */
+export const CHATGPT_LUNA_CHECKPOINT_REPAIR_ATTEMPTS = 1;
+
+/** A checkpoint is short, so a reply that has not arrived in this long is not going to. */
+export const CHATGPT_LUNA_CHECKPOINT_REPAIR_TIMEOUT_MS = 60_000;
 
 /** Bound each preload acknowledgement so a stuck part fails the turn instead of hanging forever. */
 export const CHATGPT_PRELOAD_RESPONSE_TIMEOUT_MS = 180_000;
@@ -1172,6 +1192,83 @@ export class ChatGptBrowserWorker {
     }
   }
 
+  /**
+   * Ask the same chat for the checkpoint its answer left out, and return it if one arrives.
+   *
+   * Never throws: the caller's fallback is the original failure, so a repair that does not work must
+   * leave the turn exactly as it found it. One attempt only — every message here counts against the
+   * account's rapid-message limit, and the model has already shown it can ignore the instruction.
+   */
+  private async requestMissingLunaCheckpoint(
+    page: Page,
+    turn: BrowserTurn,
+    diagnostics: ChatGptBrowserDiagnostics,
+    deadline: number | undefined,
+    deliveredAnswer: string,
+  ): Promise<CapturedChatGptLunaCheckpoint | undefined> {
+    try {
+      console.warn(
+        `[chatgpt-web] browser turn ${turn.traceId} answered without its rolling checkpoint; asking for it in the same chat`,
+      );
+      await diagnostics.capture(page, "checkpoint-missing");
+      await this.attachPrompt(page, CHATGPT_LUNA_CHECKPOINT_REPAIR_PROMPT, false);
+      const responseTurns = page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR);
+      const initialResponseTurnCount = await responseTurns.count();
+      const repairTurn = responseTurns.nth(initialResponseTurnCount);
+      const userTurns = page.locator(CHATGPT_USER_TURN_SELECTOR);
+      const initialUserTurnCount = await userTurns.count();
+      const composer = await this.activeComposer(page);
+      const sendButton = composer.locator("xpath=ancestor::form[1]").getByTestId("send-button");
+      await sendButton.waitFor({ state: "visible", timeout: browserStageTimeouts.send });
+      if (!await sendButton.isEnabled()) return undefined;
+      await settleChatGptUi();
+      await throwIfChatGptRateLimitDialog(page);
+      await sendButton.press("Enter");
+      const abortController = new AbortController();
+      await this.waitForSubmissionAccepted(
+        page,
+        userTurns,
+        responseTurns,
+        repairTurn,
+        initialUserTurnCount,
+        initialResponseTurnCount,
+        turn.abortSignal ?? abortController.signal,
+      );
+
+      const completionTracker = new ChatGptCompletionTracker();
+      const replyDeadline = Date.now() + CHATGPT_LUNA_CHECKPOINT_REPAIR_TIMEOUT_MS;
+      for (;;) {
+        if (page.isClosed()) return undefined;
+        if (turn.abortSignal?.aborted) return undefined;
+        if (Date.now() >= replyDeadline) return undefined;
+        if (deadline !== undefined && Date.now() >= deadline) return undefined;
+        await throwIfChatGptRateLimitDialog(page);
+        const snapshot = await this.responseDomSnapshot(repairTurn);
+        const running = await page.locator(CHATGPT_STOP_BUTTON_SELECTOR).last().isVisible().catch(() => false);
+        if (snapshot.responsePresent && completionTracker.update({
+          responsePresent: snapshot.responsePresent,
+          running,
+          currentText: snapshot.visibleText,
+          currentHtml: snapshot.fullHtml,
+          completionActionVisible: snapshot.completionActionVisible,
+        })) {
+          await diagnostics.capture(page, "checkpoint-recovered");
+          const recovered = captureChatGptLunaCheckpointFromRepair(snapshot.visibleText, deliveredAnswer);
+          console.info(
+            `[chatgpt-web] browser turn ${turn.traceId} recovered its rolling checkpoint from a follow-up message`,
+          );
+          return recovered;
+        }
+        await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+      }
+    } catch (error) {
+      console.warn(
+        `[chatgpt-web] browser turn ${turn.traceId} could not recover its rolling checkpoint: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }
+
   private async waitForSubmissionAccepted(
     page: Page,
     userTurns: Locator,
@@ -2003,12 +2100,29 @@ export class ChatGptBrowserWorker {
               throw new Error("ChatGPT completed with visible text that could not be serialized as Markdown");
             }
             if (final.delta) emitMarkdownDelta(final.delta);
-            if (checkpointStream) {
-              if (!checkpointStream.hasCheckpointMarker()) {
-                const remainder = checkpointStream.flushVisibleRemainder();
-                if (remainder) turn.onTextDelta(remainder);
+            if (checkpointStream && !checkpointStream.hasCheckpointMarker()) {
+              const remainder = checkpointStream.flushVisibleRemainder();
+              if (remainder) turn.onTextDelta(remainder);
+              // The answer is already with Codex, so failing here would make Codex re-deliver the
+              // whole turn and run every tool call in it a second time. Ask once for just the
+              // checkpoint instead, and only give up if that comes back without one too.
+              const recovered = await this.requestMissingLunaCheckpoint(
+                page,
+                turn,
+                diagnostics,
+                deadline,
+                checkpointStream.deliveredAnswer(),
+              );
+              if (!recovered) {
                 throw new Error("ChatGPT Luna completed without the required private rolling checkpoint");
               }
+              turn.onLunaCheckpoint!(recovered);
+              // Handed over unchanged: the store rejects a checkpoint whose hash does not match the
+              // answer it is committed with, and its canonical form only strips the *trailing* end.
+              // Trimming here would drop leading whitespace on one side of that comparison and fail
+              // the turn for a reason that has nothing to do with the checkpoint.
+              finalText = checkpointStream.deliveredAnswer();
+            } else if (checkpointStream) {
               const completed = checkpointStream.finish(snapshot.visibleText);
               turn.onLunaCheckpoint!(completed.captured);
               finalText = completed.answer;

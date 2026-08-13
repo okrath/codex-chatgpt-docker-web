@@ -72,6 +72,34 @@ function canonicalAnswer(answer: string): string {
   return answer.replaceAll("\r\n", "\n").trimEnd();
 }
 
+/**
+ * Build a capture from a follow-up reply that carries only the checkpoint.
+ *
+ * Luna omits the marker on roughly six in ten short answers (measured 2026-08-13), and failing the
+ * turn for it costs far more than the missing continuity: Codex re-delivers the whole turn, so every
+ * tool call in it runs a second time. Asking once for just the checkpoint recovers the state without
+ * re-running anything. The hash is taken over the answer Codex already received, not over this
+ * reply, because that pairing is what the store looks up later. Lenient about the marker on purpose
+ * — the model has already shown it can forget the marker, and refusing the recovery for the same
+ * reason would defeat the point.
+ */
+export function captureChatGptLunaCheckpointFromRepair(
+  replyText: string,
+  deliveredAnswer: string,
+): CapturedChatGptLunaCheckpoint {
+  const markerIndex = replyText.lastIndexOf(CHATGPT_LUNA_CHECKPOINT_MARKER);
+  const body = markerIndex >= 0
+    ? replyText.slice(markerIndex + CHATGPT_LUNA_CHECKPOINT_MARKER.length)
+    : replyText;
+  if (!canonicalAnswer(deliveredAnswer)) {
+    throw new Error("ChatGPT Luna produced no user-facing answer to attach a recovered checkpoint to");
+  }
+  return {
+    checkpoint: parseCheckpointText(body),
+    answerHash: hashChatGptLunaAnswer(deliveredAnswer),
+  };
+}
+
 export function hashChatGptLunaAnswer(answer: string): string {
   return createHash("sha256").update(canonicalAnswer(answer)).digest("hex");
 }
@@ -133,6 +161,15 @@ export class ChatGptLunaCheckpointStream {
 
   hasCheckpointMarker(): boolean {
     return this.markerSeen;
+  }
+
+  /**
+   * Exactly what has been handed to Codex so far. The checkpoint is keyed to the answer it belongs
+   * to, so a checkpoint recovered afterwards has to be hashed against the delivered text rather
+   * than against whatever a later reply happens to contain.
+   */
+  deliveredAnswer(): string {
+    return this.visibleAnswer;
   }
 
   /** Flush only when failing explicitly for a missing marker, so the answer tail is not lost. */

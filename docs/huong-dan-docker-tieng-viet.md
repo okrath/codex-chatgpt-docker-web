@@ -181,7 +181,7 @@ docker compose exec codex-chatgpt-web codex-chatgpt-web doctor
 | Muốn đổi tài khoản ChatGPT | — | Như trên: chạy `login`, đăng nhập tài khoản mới, restart |
 | Codex báo "ran out of room in the model's context window" (Luna) | Turn vượt trần ~28k của Free ngay cả sau khi tự cắt gọn | Xem `docker compose logs` để biết số token thật; cắt bớt `~/.codex/AGENTS.md`, mở thread mới, làm việc trên ít file hơn — hoặc dùng gói trả phí (mục 8) |
 | Turn giao cho subagent bị từ chối | Đã tắt slimming, mà turn subagent mang gần trọn context cha nên vượt trần | Bật lại (bỏ `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES=off`) — xem mục 8d |
-| Turn hỏng lặp lại nhiều lần liên tiếp cùng một task | Turn thiếu checkpoint → Codex gửi lại nguyên turn → chuỗi lỗi lặp | Hủy task trong Codex rồi mở task mới; xem log để xác nhận `completed without the required private rolling checkpoint` |
+| Cùng một turn chạy lại lệnh 2–3 lần, giữa các lần có `Reconnecting` | Luna trả lời mà quên checkpoint riêng → bridge làm hỏng turn → Codex gửi lại nguyên turn → **mọi tool call trong đó chạy lại** | Đã sửa: bridge giờ hỏi lại checkpoint trong cùng chat thay vì làm hỏng turn. Nếu vẫn gặp, xem log tìm `could not recover its rolling checkpoint` |
 | Model báo `turn_token` không hợp lệ / hết hạn / bị thu hồi, và nói không truy cập được repo | Container đã restart trong lúc turn đó đang chạy — token của broker chỉ nằm trong RAM nên mất hết sau restart | **Không có gì hỏng.** Chỉ cần gửi thêm một tin nhắn trong cùng task Codex; turn mới sẽ được cấp token mới. Không cần restart task hay container |
 | Muốn làm lại từ đầu | — | Xem mục 7 |
 

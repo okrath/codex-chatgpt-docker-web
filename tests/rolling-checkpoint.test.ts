@@ -10,6 +10,7 @@ import { ChatGptMarkdownBuffer } from "../src/adapters/chatgpt-web/markdown";
 import {
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
   CHATGPT_LUNA_CHECKPOINT_MARKER,
+  captureChatGptLunaCheckpointFromRepair,
   ChatGptLunaCheckpointStore,
   ChatGptLunaCheckpointStream,
   hashChatGptLunaAnswer,
@@ -290,4 +291,56 @@ test("Luna checkpoint preserves the server-resolved backend model when the raw b
   expect(applied.applied).toBeTrue();
   expect(applied.parsed.modelId).toBe("gpt-5.6-luna");
   expect(applied.parsed.options.reasoning).toBe("low");
+});
+
+test("a checkpoint recovered from a follow-up message is keyed to the answer Codex already received", () => {
+  const stream = new ChatGptLunaCheckpointStream();
+  const emitted = [stream.push("The git identity is now TrungNQ."), stream.flushVisibleRemainder()].join("");
+  expect(stream.hasCheckpointMarker()).toBeFalse();
+  expect(stream.deliveredAnswer()).toBe("The git identity is now TrungNQ.");
+  expect(emitted).toBe("The git identity is now TrungNQ.");
+
+  const recovered = captureChatGptLunaCheckpointFromRepair(
+    `${CHATGPT_LUNA_CHECKPOINT_MARKER}\nObjective: set the git identity\nOpen work: none`,
+    stream.deliveredAnswer(),
+  );
+
+  // The pairing the store looks up later is (thread, answer) — so the hash must come from the
+  // delivered answer, never from the follow-up reply that carried the checkpoint.
+  expect(recovered.answerHash).toBe(hashChatGptLunaAnswer("The git identity is now TrungNQ."));
+  expect(recovered.checkpoint.version).toBe(2);
+  const summary = recovered.checkpoint.version === 2 ? recovered.checkpoint.summary : "";
+  expect(summary).toContain("Objective: set the git identity");
+  expect(summary).not.toContain(CHATGPT_LUNA_CHECKPOINT_MARKER);
+});
+
+test("a follow-up that forgets the marker again still yields its checkpoint", () => {
+  // Being strict here would refuse recovery for the very reason recovery exists.
+  const recovered = captureChatGptLunaCheckpointFromRepair(
+    "Objective: ship the fix\nOpen work: none",
+    "the answer",
+  );
+  expect(recovered.checkpoint.version === 2 ? recovered.checkpoint.summary : "").toContain("Objective: ship the fix");
+});
+
+test("a recovered checkpoint is refused when no answer reached Codex", () => {
+  expect(() => captureChatGptLunaCheckpointFromRepair(`${CHATGPT_LUNA_CHECKPOINT_MARKER}\nObjective: x`, "   "))
+    .toThrow(/no user-facing answer/);
+  expect(() => captureChatGptLunaCheckpointFromRepair(CHATGPT_LUNA_CHECKPOINT_MARKER, "the answer"))
+    .toThrow(/did not provide a rolling checkpoint/);
+});
+
+test("the recovered hash is taken over the delivered answer exactly, leading whitespace included", () => {
+  // The store refuses a checkpoint whose hash disagrees with the answer it is committed with, and
+  // its canonical form only strips the trailing end. So a recovered capture and the text handed to
+  // the store have to be the same string — trimming one side would fail the turn.
+  const delivered = "  The commit hash is abc123.";
+  const recovered = captureChatGptLunaCheckpointFromRepair(
+    `${CHATGPT_LUNA_CHECKPOINT_MARKER}\nObjective: report the hash`,
+    delivered,
+  );
+
+  expect(recovered.answerHash).toBe(hashChatGptLunaAnswer(delivered));
+  expect(hashChatGptLunaAnswer(delivered)).not.toBe(hashChatGptLunaAnswer(delivered.trim()));
+  expect(hashChatGptLunaAnswer(delivered)).toBe(hashChatGptLunaAnswer(`${delivered}\n\n`));
 });
