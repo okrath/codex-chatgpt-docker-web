@@ -65,8 +65,9 @@ interface CommittedChatGptMarkdownSegment {
  * ChatGPT can rewrite old HTML while hydrating citations and controls, so a character prefix is
  * not a safe commit boundary. The browser supplies semantic blocks and marks a block streamable
  * only after a following block exists. Each completed block must then remain byte-stable for the
- * configured window. Once committed, presentation-only HTML rewrites are harmless; changing its
- * visible text is an explicit protocol error because Responses deltas cannot be retracted.
+ * configured window. Once committed, presentation-only HTML rewrites are harmless, and a rewrite of
+ * its visible text is dropped: Responses deltas cannot be retracted, so the stream keeps exactly
+ * what Codex already received and appends only blocks beyond it.
  */
 export class ChatGptMarkdownBuffer {
   private readonly candidates = new Map<number, ChatGptMarkdownCandidate>();
@@ -74,6 +75,7 @@ export class ChatGptMarkdownBuffer {
   private latest: ChatGptMarkdownSegment[] = [];
   private markdown = "";
   private lastGroup: string | undefined;
+  private diverged = false;
 
   constructor(
     private readonly transform: (markdown: string) => string = markdown => markdown,
@@ -85,7 +87,7 @@ export class ChatGptMarkdownBuffer {
   }
 
   observe(segments: ChatGptMarkdownSegment[], now = Date.now()): string {
-    this.assertCommittedPrefix(segments);
+    this.reconcileCommittedPrefix(segments);
     this.latest = segments.map(segment => ({ ...segment }));
 
     for (let index = this.committed.length; index < segments.length; index += 1) {
@@ -124,7 +126,7 @@ export class ChatGptMarkdownBuffer {
   }
 
   finish(): { markdown: string; delta: string } {
-    this.assertCommittedPrefix(this.latest);
+    this.reconcileCommittedPrefix(this.latest);
     let delta = "";
     for (let index = this.committed.length; index < this.latest.length; index += 1) {
       const segment = this.latest[index]!;
@@ -135,17 +137,34 @@ export class ChatGptMarkdownBuffer {
     return { markdown: this.markdown, delta };
   }
 
-  private assertCommittedPrefix(segments: ChatGptMarkdownSegment[]): void {
-    if (segments.length < this.committed.length) {
-      throw new Error("ChatGPT removed a completed text block that was already streamed to Codex");
-    }
+  /**
+   * A committed block that changes or disappears cannot be corrected, because Codex already has it.
+   * It must not end the turn either: a tool result the model dislikes makes it rewrite prose it has
+   * already produced, and failing there killed the response stream, so Codex re-delivered the whole
+   * turn and re-ran every tool call in it. The committed prefix therefore stands exactly as Codex
+   * received it, blocks past it still stream, and the discarded rewrite is reported once.
+   */
+  private reconcileCommittedPrefix(segments: ChatGptMarkdownSegment[]): void {
+    if (this.diverged) return;
+    const divergence = this.findDivergence(segments);
+    if (!divergence) return;
+    this.diverged = true;
+    console.warn(
+      `[chatgpt-web] ChatGPT ${divergence} that was already streamed to Codex; keeping the`
+      + ` ${this.committed.length} block(s) Codex received and appending only later blocks`,
+    );
+  }
+
+  private findDivergence(segments: ChatGptMarkdownSegment[]): string | undefined {
+    if (segments.length < this.committed.length) return "removed a completed text block";
     for (let index = 0; index < this.committed.length; index += 1) {
       const previous = this.committed[index]!;
       const current = segments[index]!;
       if (current.key !== previous.key || current.text !== previous.text) {
-        throw new Error("ChatGPT changed a completed text block that was already streamed to Codex");
+        return "changed a completed text block";
       }
     }
+    return undefined;
   }
 
   private commit(segment: ChatGptMarkdownSegment): string {

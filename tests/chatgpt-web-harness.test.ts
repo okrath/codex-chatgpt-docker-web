@@ -1126,7 +1126,7 @@ describe("ChatGPT outer-native harness v4", () => {
     });
   });
 
-  test("buffers citation hydration, tolerates later markup-only rewrites, and rejects text rewrites", () => {
+  test("buffers citation hydration, tolerates later markup-only rewrites, and drops text rewrites", () => {
     const plain = "<p>Source</p>";
     const linked = '<p><a href="https://example.com">Source</a></p>';
     const hydrated = new ChatGptMarkdownBuffer(markdown => markdown, 100);
@@ -1143,13 +1143,27 @@ describe("ChatGPT outer-native harness v4", () => {
       { key: "source", html: `${linked}<button>Copy</button>`, text: "Source", streamable: true },
     ], 200)).toBe("");
 
+    // A tool result the model dislikes makes it rewrite prose Codex already has. The rewrite cannot
+    // be delivered, but the turn survives it: later blocks keep streaming instead of the stream
+    // dying and Codex re-delivering the whole turn.
     const rewritten = new ChatGptMarkdownBuffer(markdown => markdown, 100);
     const source = [{ key: "source", html: plain, text: "Source", streamable: true }];
     expect(rewritten.observe(source, 0)).toBe("");
     expect(rewritten.observe(source, 100)).toBe("Source");
-    expect(() => rewritten.observe([
+    const rewrite = [
       { key: "source", html: "<p>Different</p>", text: "Different", streamable: true },
-    ], 200)).toThrow("completed text block");
+      { key: "tail", html: "<p>Tail</p>", text: "Tail", streamable: true },
+    ];
+    expect(rewritten.observe(rewrite, 200)).toBe("");
+    expect(rewritten.observe(rewrite, 300)).toBe("\n\nTail");
+    expect(rewritten.finish()).toEqual({ delta: "", markdown: "Source\n\nTail" });
+
+    const truncated = new ChatGptMarkdownBuffer(markdown => markdown, 0);
+    expect(truncated.observe([
+      { key: "source", html: plain, text: "Source", streamable: true },
+    ], 0)).toBe("Source");
+    expect(truncated.observe([], 100)).toBe("");
+    expect(truncated.finish()).toEqual({ delta: "", markdown: "Source" });
   });
 
   test("drops decorative HTML images without removing textual links", () => {
@@ -2127,7 +2141,10 @@ describe("ChatGPT outer-native harness v4", () => {
         turn_token: "turn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       });
       expect(invalid.isError).toBe(true);
-      expect(JSON.stringify(invalid.content)).toContain("not known to the running bridge process");
+      // The registered turn is still live here, so the refusal has to read as a copy error and send
+      // the model back to the token in its prompt rather than announcing a restart.
+      expect(JSON.stringify(invalid.content)).toContain("not one the running bridge process issued");
+      expect(JSON.stringify(invalid.content)).toContain("mistyped or truncated");
 
       const execPromise = call("codex_exec", { turn_token: token, cmd: "pwd", workdir: tempRoot });
       const [execRequest] = await Promise.race([

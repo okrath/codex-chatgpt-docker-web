@@ -295,18 +295,21 @@ test("turn broker names the finished turn that owns a replayed handle", async ()
       sandboxPolicy: { type: "dangerFullAccess" },
       tools: [],
     }, 60_000, "turn-alpha");
-    // A token this process never issued reads as a restart, and the message has to say so: the
-    // model's only other option is to guess, and it guessed that the user's task was broken.
-    let unknownToken = "";
+    // A corrupted copy of a live token, while this process still holds that turn, must read as the
+    // copy error it is and send the model back to the token in its own prompt. Calling it a restart
+    // cost the whole turn: the model believed the workspace was gone and stopped to ask the user.
+    let mistypedToken = "";
     try {
       await callTurnBroker(socketPath, { method: "claim", token: ` ${token}` });
     } catch (error) {
-      unknownToken = error instanceof Error ? error.message : String(error);
+      mistypedToken = error instanceof Error ? error.message : String(error);
     }
-    expect(unknownToken).toContain("not known to the running bridge process");
-    expect(unknownToken).toContain("the bridge restarted after the token was issued");
-    expect(unknownToken).toContain("Nothing is wrong with the Codex task");
-    expect(unknownToken).toContain("sending one more message starts a new turn");
+    expect(mistypedToken).toContain("not one the running bridge process issued");
+    expect(mistypedToken).toContain("1 live Codex turn");
+    expect(mistypedToken).toContain("mistyped or truncated");
+    expect(mistypedToken).toContain("<codex_transport_resume>");
+    expect(mistypedToken).toContain("retry this same Codex Native call");
+    expect(mistypedToken).toContain("Nothing is wrong with the Codex task");
     const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
     broker.revoke(token);
 
@@ -332,6 +335,13 @@ test("turn broker names the finished turn that owns a replayed handle", async ()
     expect(replayedToken).toContain("turn-alpha");
     expect(replayedToken).toContain("can no longer run");
     expect(replayedToken).not.toContain("current task context");
+
+    // With no live turn left either, a restart is the remaining explanation, and the model still has
+    // to hear that the task itself survived it.
+    const restarted = await rejection({ method: "claim", token: "turn_never-issued-by-this-process" });
+    expect(restarted).toContain("not known to the running bridge process");
+    expect(restarted).toContain("the bridge restarted after the token was issued");
+    expect(restarted).toContain("sending one more message starts a new turn");
 
     const unknownBinding = await rejection({
       method: "invoke",

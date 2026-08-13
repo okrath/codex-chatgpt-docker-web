@@ -83,6 +83,11 @@ reads to the model like a broken task. The Codex task is fine — one more messa
 turn with a valid token. Prefer restarting while no turn is running, and expect a rebuild
 during an active task to interrupt it.
 
+A refused token does not imply a restart, though. The model retypes those 37 characters into
+every call, so an unknown token while this same process still holds a live turn is a corrupted
+copy, and the broker says that instead: re-read the token from the turn's own prompt and retry
+the call. `liveTurns` in the `broker claim received` log line separates the two readings.
+
 ## Storage layout
 
 | Location | Contents | Lifetime |

@@ -485,18 +485,35 @@ export class TurnBroker {
       if (typeof token !== "string" || token.length === 0) throw new Error("turn token is required");
       const channel = this.channels.get(token);
       const retiredTurn = channel ? undefined : this.retiredTokens.get(token);
+      const liveTurns = this.channels.size;
       console.error(
         `[chatgpt-web] broker claim received (tokenChars=${token.length}, valid=${Boolean(channel)}`
-        + `${channel ? "" : `, retiredTurn=${retiredTurn ?? "unknown"}`})`,
+        + `${channel ? "" : `, retiredTurn=${retiredTurn ?? "unknown"}, liveTurns=${liveTurns}`})`,
       );
       if (!channel) {
         throw new Error(retiredTurn !== undefined
           ? `This turn_token was issued for ${retiredTurnLabel(retiredTurn)}, which has already finished.`
           + " This Codex Native action can no longer run."
-          // A token this process never issued is almost always one from before the bridge
-          // restarted: broker state lives in memory, so a restart drops every token in flight.
-          // The old wording ("invalid, expired, or revoked") left the model guessing, and it
-          // guessed that the task was broken and told the user to rebuild a session that was fine.
+          : liveTurns > 0
+          // A token this process never issued, while this same process still holds a live turn, is a
+          // corrupted copy far more often than a restart: the model transcribes 37 opaque characters
+          // by hand into every call, and a dropped or altered character looks identical here. Saying
+          // "restart" then costs the whole turn, because the model believes the workspace is
+          // unreachable and stops to ask the user for a new message. Point it back at the token it
+          // was given instead, and keep the restart reading as the explicit second step.
+          ? `This turn_token is not one the running bridge process issued, and that process still holds`
+          + ` ${liveTurns} live Codex turn${liveTurns === 1 ? "" : "s"}, so a restart did not drop it:`
+          + " the value sent here was almost certainly mistyped or truncated while being copied."
+          + " Re-read the turn_token from the <codex_transport_resume> line of this turn's prompt and"
+          + " retry this same Codex Native call with that exact value. Nothing is wrong with the Codex"
+          + " task, the workspace, or this tool connection, so do not tell the user the bridge is"
+          + " unavailable. Only if that token is identical to the one just refused did the bridge"
+          + " restart after this turn began; then tell the user that sending one more message starts"
+          + " a new turn."
+          // With no live turn either, a restart is the remaining explanation: broker state lives in
+          // memory, so a restart drops every token in flight. The old wording ("invalid, expired, or
+          // revoked") left the model guessing, and it guessed that the task was broken and told the
+          // user to rebuild a session that was fine.
           : "This turn_token is not known to the running bridge process, which almost always means"
           + " the bridge restarted after the token was issued; a restart invalidates every turn"
           + " token that was still in flight. Nothing is wrong with the Codex task, the workspace,"
