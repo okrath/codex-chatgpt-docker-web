@@ -95,12 +95,23 @@ mapping at `17841`; only the noVNC port is freely remappable.
 ChatGPT Free rejects a single browser message above a measured ~28,000-token transport
 budget, and every Codex turn must fit into one message. Every Luna turn drops harness-only
 `## Rule:` sections from the compiled context (ClaudeKit-style bundles a Web model cannot
-execute: skill routing tables, hook protocols, agent-team rules). If the turn still exceeds
-the budget the bridge escalates with shrinking keep-windows until it fits: (1) condense the
-remaining rule sections to their first paragraph, then (2) collapse older history — removing
-it outright and replacing the whole span with a single marker message, down toward just the
-current turn (recent messages and the in-flight round kept; older developer contracts folded
-in only at the deepest step). Collapsing to one marker matters — a per-message placeholder
+execute: skill routing tables, hook protocols, agent-team rules).
+
+If the turn still exceeds the budget, the bridge first tries a **lossless** route:
+multi-message preload (on by default) splits the turn into ordered earlier-context messages
+plus a final task message, each inside the budget, delivered into the same chat so the model
+accumulates the whole thread in its own window. User-authored `## Rule:` sections ride along
+verbatim here, because preload runs before any condensing. Preload is capped at three parts
+(`CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS`) because ChatGPT Free stops acknowledging after
+roughly three rapid messages in one chat, and a failed delivery is retried once as a single
+slimmed message, so it is never worse than the lossy route. Disable with
+`CODEX_CHATGPT_WEB_LUNA_PRELOAD=off`. A 📨 line in the Codex trace reports the split.
+
+Only when preload cannot apply does the bridge escalate with shrinking keep-windows until it
+fits: (1) condense the remaining rule sections to their first paragraph, then (2) collapse
+older history — removing it outright and replacing the whole span with a single marker
+message, down toward just the current turn (recent messages and the in-flight round kept;
+older developer contracts folded in only at the deepest step). Collapsing to one marker matters — a per-message placeholder
 across hundreds of items would itself cost tens of thousands of tokens; a ~340k-token thread
 compiles to ~10k. This keeps long, tool-heavy threads alive instead of dead-ending on "ran
 out of room in the model's context window," and the
@@ -110,6 +121,15 @@ native-model Codex usage is unaffected. A ✂️ commentary line appears in the 
 whenever slimming rescued an over-budget turn; routine strips are logged to the daemon
 console. Configure with `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (comma-separated section names,
 `off` disables).
+
+**Slimming is also what makes Codex's own subagents work on a free account.** Setup enables
+Codex delegation (`multi_agent = true`, with `multi_agent_v2 = false` so the bridge can read
+cross-backend task payloads), and each delegated subagent is a full Codex task with its own
+turn, its own Temporary Chat, its own budget, and its own local tools. Measured live on Free:
+one task delegated to two subagents produced three concurrent browser turns, and each
+subagent turn arrived at about 32,100 tokens — over the ~28,000 limit — fitting only after
+the harness-only rule sections (~3,900 tokens) were dropped. With slimming disabled, expect
+delegated turns to be rejected outright.
 
 ## Full harness (MCP) in the container
 

@@ -179,6 +179,9 @@ docker compose exec codex-chatgpt-web codex-chatgpt-web doctor
 | Codex không thấy model ChatGPT Web | Chưa restart Codex sau setup | Tắt hẳn Codex, mở lại |
 | Turn báo lỗi login state missing/expired | Phiên ChatGPT hết hạn (~3 tháng) | `docker compose exec codex-chatgpt-web codex-chatgpt-web login` → đăng nhập qua noVNC → `docker compose restart codex-chatgpt-web` |
 | Muốn đổi tài khoản ChatGPT | — | Như trên: chạy `login`, đăng nhập tài khoản mới, restart |
+| Codex báo "ran out of room in the model's context window" (Luna) | Turn vượt trần ~28k của Free ngay cả sau khi tự cắt gọn | Xem `docker compose logs` để biết số token thật; cắt bớt `~/.codex/AGENTS.md`, mở thread mới, làm việc trên ít file hơn — hoặc dùng gói trả phí (mục 8) |
+| Turn giao cho subagent bị từ chối | Đã tắt slimming, mà turn subagent mang gần trọn context cha nên vượt trần | Bật lại (bỏ `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES=off`) — xem mục 8d |
+| Turn hỏng lặp lại nhiều lần liên tiếp cùng một task | Turn thiếu checkpoint → Codex gửi lại nguyên turn → chuỗi lỗi lặp | Hủy task trong Codex rồi mở task mới; xem log để xác nhận `completed without the required private rolling checkpoint` |
 | Muốn làm lại từ đầu | — | Xem mục 7 |
 
 ## 7. Reset toàn bộ / Gỡ cài đặt
@@ -232,6 +235,64 @@ thread đã gộp thì không đáng tin — lúc đó mở thread mới sạch 
 
 Tùy biến danh sách section bị cắt qua biến môi trường
 `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` (danh sách tên cách nhau dấu phẩy; đặt `off` để tắt).
+
+### 8b. Preload: chia nhiều tin nhắn thay vì gộp mất mát (bật mặc định)
+
+Gộp lịch sử ở bước 3 là **có mất mát** — model không còn thấy toàn văn. Nên trước khi gộp,
+bridge thử một cách khác: **chia turn quá khổ thành nhiều tin nhắn** gửi lần lượt **vào cùng
+một chat**, mỗi tin nhắn nằm trong trần 28k, rồi tin nhắn cuối mới là task. Model tích lũy
+dần cả thread trong cửa sổ ~1M của nó, nên không mất gì cả.
+
+Vài điểm cần biết:
+
+- Chỉ kích hoạt với **turn vượt trần**; turn vừa 28k đi nguyên một tin nhắn như cũ.
+- Các section `## Rule:` **do bạn viết** được mang **nguyên văn** trong phần preload thay vì
+  bị tóm tắt — vì preload chạy **trước** bước tóm tắt quy tắc.
+- Trần **3 phần** (`CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS`). Lý do là đo được: ChatGPT
+  Free **ngừng phản hồi sau khoảng 3 tin nhắn gửi nhanh liên tiếp trong một chat**, và triệu
+  chứng là **im lặng, không báo lỗi**. Turn cần nhiều hơn 3 phần sẽ quay về cách gộp.
+- Nếu giao preload thất bại giữa đường, turn được gửi lại **một lần** dưới dạng một tin nhắn
+  đã cắt gọn — nên preload không bao giờ tệ hơn gộp.
+- Dòng `📨` trong trace Codex cho biết turn đã bị chia làm mấy phần.
+
+Tắt bằng `CODEX_CHATGPT_WEB_LUNA_PRELOAD=off`.
+
+### 8c. Nhớ lại nguyên văn phần đã nén (chỉ full mode)
+
+Checkpoint cuộn là **bản tóm tắt**, nên một chi tiết chính xác từ xa (một đường dẫn, một tag
+deploy, output một lệnh) có thể rơi ra khỏi nó. Ở **full mode**, bridge giữ nguyên văn phần
+lịch sử đã bị nén trong **RAM phạm vi turn** và nói cho model biết nó **có thể** lấy khi cần:
+
+- Model làm việc trên bản tóm tắt như bình thường.
+- Khi cần chi tiết mà bản tóm tắt không có, nó gọi `codex_tool_call` với
+  `__codex_search_collapsed_history_v1` để tìm, rồi `__codex_load_collapsed_history_v1` để
+  đọc nguyên văn.
+- Cơ chế này **tùy chọn**: turn nào không cần thì hoàn toàn không thay đổi gì. Kho nhớ là
+  **chỉ đọc**, bị xoá khi turn kết thúc, và không thêm tool, quyền, hay đường vào máy bạn.
+
+Đã kiểm chứng thật: một giá trị gieo ở turn đầu, bị tóm tắt mất ở các turn sau, đã được đọc
+lại **chính xác** sau khi model tự gọi tool (`history search matches=2/8` trong log). Chế độ
+browser-only và Pro (read-only) không có kho nhớ này.
+
+### 8d. Subagent của Codex chạy được — và slimming là điều kiện để nó chạy
+
+Codex có cơ chế **delegate** riêng, và setup của fork này **đã bật sẵn**: nó ghi
+`multi_agent = true` vào `~/.codex/config.toml` (kèm `multi_agent_v2 = false`, vì V2 mã hoá
+payload giữa các backend mà bridge cần đọc được).
+
+Mỗi subagent Codex sinh ra là **một task Codex đầy đủ**, nên nó có turn riêng → **chat
+Temporary riêng → ngân sách 28k riêng → và tool cục bộ thật**. Nghĩa là bạn không cần bất kỳ
+cơ chế subagent tự chế nào; cứ yêu cầu Codex chia việc là được.
+
+Đã kiểm chứng trên tài khoản **Free**: một task giao cho hai subagent đã tạo ra **ba browser
+turn chạy song song**, và cả hai turn con đều hoàn tất.
+
+**Điều quan trọng phải biết:** mỗi turn subagent mang theo **gần như toàn bộ context của
+turn cha**. Trong lần đo, cả hai turn con đến bridge ở mức **~32.100 token — vượt trần
+28.000 của Free** — và chúng chỉ vừa được vì slimming đã cắt các khối rule harness-only
+(~3.900 token) xuống còn ~27.900. Nên trên tài khoản Free, slimming **không chỉ** để cứu
+thread dài: nó là **điều kiện để subagent của Codex chạy được**. Nếu bạn tắt nó
+(`CODEX_CHATGPT_WEB_LUNA_TRIM_RULES=off`), hãy chờ đợi các turn delegate bị từ chối.
 
 ## 9. Full mode — cho model quyền dùng tool cục bộ (MCP)
 
