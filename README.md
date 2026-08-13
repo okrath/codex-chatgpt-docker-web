@@ -325,6 +325,7 @@ same noVNC page shows every ChatGPT turn live.
 | Codex does not list ChatGPT Web models | Codex was not restarted after setup | Quit the Codex app fully and reopen it |
 | Turns fail with missing/expired login state | The ChatGPT session expired (~3 months) | `docker compose exec codex-chatgpt-web codex-chatgpt-web login`, sign in via noVNC, then `docker compose restart codex-chatgpt-web` |
 | Codex says it "ran out of room in the model's context window" on Luna | The compiled turn exceeds ChatGPT Free's ~28k-token per-message transport budget even after automatic slimming | Check `docker compose logs` for the exact numbers; trim global instructions (e.g. `~/.codex/AGENTS.md`), start a smaller task, or use a paid ChatGPT tier |
+| The model says its `turn_token` is invalid/expired/revoked and it cannot reach the workspace | The bridge restarted while that turn was in flight; broker state is in memory, so every outstanding token is dropped | Nothing is broken — send one more message in the same Codex task. A new turn issues a fresh token. No need to restart the task or the container |
 | Switch ChatGPT accounts | — | Same as above: run `login` with the new account, then restart |
 | Start over completely | — | `docker compose exec codex-chatgpt-web codex-chatgpt-web route disconnect`, then `docker compose down -v`, then reinstall |
 
@@ -343,6 +344,12 @@ docker compose exec codex-chatgpt-web codex-chatgpt-web login
 ```bash
 docker compose restart codex-chatgpt-web
 ```
+
+> [!IMPORTANT]
+> **Restarting or rebuilding the container kills every turn that is in flight.** The turn broker
+> keeps its capability tokens in memory only, so after a restart the model's `turn_token` is no
+> longer recognised and its next tool call fails. The task itself is unharmed: send one more
+> message and the new turn gets a fresh token. Prefer restarting while no Codex turn is running.
 
 ```bash
 # Remove the model route from ~/.codex/config.toml

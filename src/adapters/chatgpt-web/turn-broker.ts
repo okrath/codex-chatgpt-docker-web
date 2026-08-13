@@ -493,7 +493,15 @@ export class TurnBroker {
         throw new Error(retiredTurn !== undefined
           ? `This turn_token was issued for ${retiredTurnLabel(retiredTurn)}, which has already finished.`
           + " This Codex Native action can no longer run."
-          : "turn token is invalid, expired, or revoked");
+          // A token this process never issued is almost always one from before the bridge
+          // restarted: broker state lives in memory, so a restart drops every token in flight.
+          // The old wording ("invalid, expired, or revoked") left the model guessing, and it
+          // guessed that the task was broken and told the user to rebuild a session that was fine.
+          : "This turn_token is not known to the running bridge process, which almost always means"
+          + " the bridge restarted after the token was issued; a restart invalidates every turn"
+          + " token that was still in flight. Nothing is wrong with the Codex task, the workspace,"
+          + " or this tool connection. Do not retry with this token: tell the user that sending one"
+          + " more message starts a new turn, which issues a valid token.");
       }
       if (channel.finalized) throw new Error("Codex turn is already finalized");
       if (channel.bindingId) {

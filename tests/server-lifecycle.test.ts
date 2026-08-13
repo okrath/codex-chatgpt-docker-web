@@ -175,7 +175,9 @@ test("a full-mode runtime exposes its broker endpoint before any turn registers"
       if (!message.includes("unavailable") || Date.now() >= deadline) break;
       await Bun.sleep(20);
     }
-    expect(message).toContain("turn token is invalid");
+    // The broker answered, which is the point here — a token it never issued is refused by the
+    // broker itself rather than by a missing endpoint.
+    expect(message).toContain("not known to the running bridge process");
   } finally {
     await server.stop(true);
     await closeTurnBrokers();

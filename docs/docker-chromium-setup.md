@@ -75,6 +75,14 @@ Model turns run headed inside the virtual display, so the noVNC page also lets y
 every ChatGPT turn live — the same visibility the desktop launcher's embedded browser
 provides.
 
+**Restarting or rebuilding kills every in-flight turn.** The turn broker holds its capability
+tokens in two in-memory maps and never persists them, so a restart leaves the model holding a
+`turn_token` the new process has never seen; its next Codex Native call is refused. The broker
+distinguishes this from a token it retired itself and says so, because the failure otherwise
+reads to the model like a broken task. The Codex task is fine — one more message starts a new
+turn with a valid token. Prefer restarting while no turn is running, and expect a rebuild
+during an active task to interrupt it.
+
 ## Storage layout
 
 | Location | Contents | Lifetime |

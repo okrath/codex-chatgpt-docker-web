@@ -295,8 +295,18 @@ test("turn broker names the finished turn that owns a replayed handle", async ()
       sandboxPolicy: { type: "dangerFullAccess" },
       tools: [],
     }, 60_000, "turn-alpha");
-    await expect(callTurnBroker(socketPath, { method: "claim", token: ` ${token}` }))
-      .rejects.toThrow("turn token is invalid, expired, or revoked");
+    // A token this process never issued reads as a restart, and the message has to say so: the
+    // model's only other option is to guess, and it guessed that the user's task was broken.
+    let unknownToken = "";
+    try {
+      await callTurnBroker(socketPath, { method: "claim", token: ` ${token}` });
+    } catch (error) {
+      unknownToken = error instanceof Error ? error.message : String(error);
+    }
+    expect(unknownToken).toContain("not known to the running bridge process");
+    expect(unknownToken).toContain("the bridge restarted after the token was issued");
+    expect(unknownToken).toContain("Nothing is wrong with the Codex task");
+    expect(unknownToken).toContain("sending one more message starts a new turn");
     const claimed = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token });
     broker.revoke(token);
 

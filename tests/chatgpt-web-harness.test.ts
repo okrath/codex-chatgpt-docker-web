@@ -2127,7 +2127,7 @@ describe("ChatGPT outer-native harness v4", () => {
         turn_token: "turn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       });
       expect(invalid.isError).toBe(true);
-      expect(JSON.stringify(invalid.content)).toContain("turn token is invalid, expired, or revoked");
+      expect(JSON.stringify(invalid.content)).toContain("not known to the running bridge process");
 
       const execPromise = call("codex_exec", { turn_token: token, cmd: "pwd", workdir: tempRoot });
       const [execRequest] = await Promise.race([
