@@ -64,12 +64,42 @@ turn's completion watcher.
    completion watch), without changing main-path behavior (regression suite
    must stay green before the new entry point is added).
 2. Implement `research-subagent.ts`: prompt = short browser-only contract +
-   `buildFloorProcedureBlock({ localTools: false })` + fenced question; token
-   guard via `estimateTokens` against the Luna budget; answer cap 32,000 chars
-   with a truncation flag.
+   fenced question; answer cap 32,000 chars with a truncation flag.
+   **Amended during implementation:** the Floor block this step originally
+   called for no longer exists (measured harmful, removed 2026-08-13), and the
+   separate token guard was dropped as unreachable — a question at the 16,000
+   character cap compiles to well under half the per-message budget, and a test
+   pins that relationship instead, so raising the cap too far fails the build
+   rather than the composer.
 3. Implement the worker entry point with the serial lock, timeout, diagnostics
    suffix, and page cleanup on every exit path.
 4. Unit tests per above; full suite + typecheck in the throwaway bun container.
+
+## Carried into phase 3 by review
+
+Raised in the phase-2 review and deliberately left for the phase that wires the
+tool up, because each one is about the caller's contract rather than the
+delivery mechanics:
+
+- **Queue latency belongs to somebody.** The worker is a per-config singleton,
+  so one `SerialQueue` serves every concurrent Codex turn. With 3 calls per turn
+  and 5 turn slots the worst case is a long serial backlog, and the wait is
+  currently charged to no deadline. Phase 3 should cap queue depth (refusing
+  fail-open when deeper) and decide whether the timeout bounds time-in-sub-chat
+  or time-the-parent-waits.
+- **Typed browser errors must not escape as parent-turn failures.** Shared
+  helpers throw retryable `ChatGptWebAdapterError`s (rate limit, subscription,
+  "Something went wrong"). If those propagate, a *sub*-chat rate limit fails the
+  parent turn and re-arms the retry storm. Phase 3 converts them to structured
+  tool results.
+- **Error text names the wrong subject.** Shared helpers say "the Codex turn was
+  terminated" / "Retry the turn"; inside a sub-turn that is false and the parent
+  model would read it as its own turn dying. Wrap or relabel at the tool-result
+  boundary.
+- **Diagnostics retention.** Each sub-turn takes one of the 10 retained trace
+  directories, so a parent with 3 sub-turns evicts history roughly four times
+  faster. Nest sub-turn artifacts under the parent trace or raise the limit for
+  the smoke.
 
 ## Success Criteria
 

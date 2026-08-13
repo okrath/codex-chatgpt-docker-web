@@ -55,7 +55,7 @@ only way to multiply usable context per Codex turn on the Free tier.
 | Wire name | `__codex_research_subagent_v1`, reserved `codex_tool_call` name beside the recall tools |
 | Discovery | One sentence in the full-mode transport contract; no schema/inventory change |
 | Question contract | Self-contained: the caller quotes whatever context the sub-agent needs into `question` (the main model already holds the context). Bridge-side slicing of broker RAM is explicitly deferred. |
-| Sub-agent prompt | Bridge-authored browser-only contract + sealed Floor block (read-only Deliver) + the question. No tools, no turn token, no checkpoint contract, no Codex context envelope. |
+| Sub-agent prompt | Bridge-authored browser-only contract + the question, fenced. No tools, no turn token, no checkpoint contract, no Codex context envelope. (The sealed Floor block was originally planned here; it was measured harmful and removed from the repo on 2026-08-13, so the sub-turn prompt carries no procedure block — and, per that lesson, must never carry prose that contradicts another contract in the same message.) |
 | Budget guards | `question` capped so contract + Floor + question ≤ the Luna transport budget; answer capped at 32,000 chars (mirrors `HISTORY_LOAD_RESPONSE_CHAR_CAP`), truncation flagged in the result |
 | Concurrency | Serial only; one sub-chat at a time; max `3` calls per turn (counter in turn-scoped broker state) |
 | Rollout | Behind `CODEX_CHATGPT_WEB_SUBAGENT` **default off**; flipped on only after phase-4 live smoke (the preload-productionization precedent) |

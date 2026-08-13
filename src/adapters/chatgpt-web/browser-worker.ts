@@ -29,6 +29,14 @@ import {
 import { CHATGPT_MAX_INPUT_IMAGES, type CompiledChatGptWebPrompt, type ChatGptWebPromptImage } from "./prompt";
 import { toChatGptWebTransportPlan, type PreparedChatGptWebPrompt } from "./transport-contract";
 import { deliverPreambleParts } from "./browser-transport";
+import {
+  buildResearchSubTurnPrompt,
+  resolveResearchSubTurnTimeoutMs,
+  shapeResearchSubTurnAnswer,
+  SerialQueue,
+  type ResearchSubTurnAnswer,
+  type ResearchSubTurnRequest,
+} from "./research-subagent";
 import { estimateCompiledChatGptWebInputTokens } from "./input-tokens";
 import {
   assertAuthenticatedChatGptPage,
@@ -736,6 +744,7 @@ export class ChatGptBrowserWorker {
   private launcherHelper?: LauncherBrowserHelperClient;
   private maintenanceTail: Promise<void> = Promise.resolve();
   private readonly activeRuns = new Map<string, Promise<string>>();
+  private readonly researchSubTurns = new SerialQueue();
 
   private constructor(private readonly config: ResolvedBrowserConfig) {}
 
@@ -796,6 +805,11 @@ export class ChatGptBrowserWorker {
       await helper.close();
     }
     await Promise.allSettled([...this.activeRuns.values()]);
+    // Sub-turns are not registered in activeRuns on purpose — they must not consume one of the
+    // turn slots — so shutdown drains their queue explicitly. A sub-turn that started after this
+    // point would relaunch the browser being torn down here and send a message nobody reads.
+    this.researchSubTurns.close();
+    await this.researchSubTurns.idle();
     await this.maintenanceTail;
     const browser = this.browser;
     this.browser = undefined;
@@ -1167,6 +1181,178 @@ export class ChatGptBrowserWorker {
       })) {
         await diagnostics.capture(page, `preload-part-${index + 1}-complete`);
         return;
+      }
+      await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
+    }
+  }
+
+  /**
+   * Answer one scoped research question in its own Temporary Chat and return the Markdown.
+   *
+   * Runs while the parent turn is parked on the connector call that requested it, in a second page
+   * of the same browser context. The parent's watcher polls its own `Page` handle and this one never
+   * touches it; background throttling cannot interfere either, since the container's Chromium runs
+   * with Playwright's occlusion/timer throttling disabled.
+   *
+   * Sub-turns are queued, never concurrent — see SerialQueue. Failures are the caller's to report as
+   * a tool result: nothing here should fail the parent turn.
+   */
+  async runResearchSubTurn(request: ResearchSubTurnRequest): Promise<ResearchSubTurnAnswer> {
+    // Validation and host support are decided before queueing: a request that can never run must
+    // not hold a queue slot behind sub-turns that can.
+    if (this.config.browserHost === "launcher") {
+      throw new Error("Research sub-turns require the managed browser host");
+    }
+    const prompt = buildResearchSubTurnPrompt(request.question);
+    const timeoutMs = resolveResearchSubTurnTimeoutMs(request.timeoutMs);
+    const traceId = `${request.parentTraceId}-sub${request.index}`;
+    return await this.researchSubTurns.run(() => this.executeResearchSubTurn(traceId, prompt, timeoutMs, request));
+  }
+
+  private async executeResearchSubTurn(
+    traceId: string,
+    prompt: string,
+    timeoutMs: number,
+    request: ResearchSubTurnRequest,
+  ): Promise<ResearchSubTurnAnswer> {
+    // Queue wait can be long, so the parent may already be gone by the time this starts. Sending
+    // anyway would spend a message from the account's pacing budget on an answer nobody reads.
+    this.assertResearchSubTurnLive(request.abortSignal);
+    const diagnostics = new ChatGptBrowserDiagnostics(traceId);
+    console.info(`[chatgpt-web] research sub-turn ${traceId} opened (promptChars=${prompt.length})`);
+    const page = await this.pageForNewTurn();
+    try {
+      await this.runStage(traceId, "sub_chat_preparation", browserStageTimeouts.temporaryChatPreparation, async () => {
+        await this.prepareTemporaryChatSurface(page, checkpoint => diagnostics.capture(page, checkpoint));
+        // Confirms the model this account actually serves; on Free it asserts the Luna default
+        // rather than choosing anything. A sub-chat that silently ran on a different model would
+        // be a different answer with no way to tell from the result.
+        await this.selectModelAndEffort(
+          page,
+          request.modelId,
+          request.reasoning,
+          request.capabilities,
+          checkpoint => diagnostics.capture(page, checkpoint),
+        );
+      });
+      // localTools false: no connector mention, no turn token, no local reach from this chat.
+      await this.runStage(traceId, "sub_prompt_attachment", browserStageTimeouts.promptAttachment, () => (
+        this.attachPrompt(page, prompt, false, checkpoint => diagnostics.capture(page, checkpoint))
+      ));
+      const responseTurn = await this.runStage(traceId, "sub_send", browserStageTimeouts.send, async (stageSignal) => {
+        this.assertResearchSubTurnLive(request.abortSignal);
+        const responseTurns = page.locator(CHATGPT_ASSISTANT_TURN_SELECTOR);
+        const initialResponseTurnCount = await responseTurns.count();
+        const pending = responseTurns.nth(initialResponseTurnCount);
+        const userTurns = page.locator(CHATGPT_USER_TURN_SELECTOR);
+        const initialUserTurnCount = await userTurns.count();
+        const composer = await this.activeComposer(page);
+        const sendButton = composer.locator("xpath=ancestor::form[1]").getByTestId("send-button");
+        await sendButton.waitFor({ state: "visible", timeout: browserStageTimeouts.send });
+        if (!await sendButton.isEnabled()) {
+          throw new Error("ChatGPT send button is disabled for the research sub-turn");
+        }
+        await settleChatGptUi();
+        await throwIfChatGptRateLimitDialog(page);
+        await throwIfChatGptSessionFailureAlert(page);
+        await sendButton.press("Enter");
+        // Bounded by this stage: an acceptance that never arrives — the shape ChatGPT's rapid-message
+        // throttle produces, with no new turn and no stop button — would otherwise spin forever and
+        // wedge every later sub-turn behind it.
+        await this.waitForSubmissionAccepted(
+          page,
+          userTurns,
+          responseTurns,
+          pending,
+          initialUserTurnCount,
+          initialResponseTurnCount,
+          request.abortSignal ? AbortSignal.any([stageSignal, request.abortSignal]) : stageSignal,
+        );
+        return pending;
+      });
+      const markdown = await this.collectResearchSubTurnAnswer(
+        page,
+        responseTurn,
+        diagnostics,
+        Date.now() + timeoutMs,
+        timeoutMs,
+        traceId,
+        request.abortSignal,
+      );
+      const shaped = shapeResearchSubTurnAnswer(markdown);
+      console.info(
+        `[chatgpt-web] research sub-turn ${traceId} completed (answerChars=${shaped.answer.length}${shaped.truncated ? ", truncated" : ""})`,
+      );
+      return shaped;
+    } catch (error) {
+      // Phase 4 has to be able to read a failed sub-turn the same way it reads a failed main turn.
+      await diagnostics.capture(page, "sub-turn-failed", error).catch(() => {});
+      // Closing the tab mid-generation abandons work the account still pays for; stop it first,
+      // exactly as the main loop does on abort.
+      const stop = page.locator(CHATGPT_STOP_BUTTON_SELECTOR).last();
+      if (await stop.isVisible().catch(() => false)) await stop.press("Enter").catch(() => {});
+      throw error;
+    } finally {
+      await page.close().catch(() => {});
+    }
+  }
+
+  private assertResearchSubTurnLive(abortSignal?: AbortSignal): void {
+    if (abortSignal?.aborted) throw new DOMException("Research sub-turn aborted", "AbortError");
+  }
+
+  private async collectResearchSubTurnAnswer(
+    page: Page,
+    responseTurn: Locator,
+    diagnostics: ChatGptBrowserDiagnostics,
+    deadline: number,
+    timeoutMs: number,
+    traceId: string,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const markdownBuffer = new ChatGptMarkdownBuffer();
+    const completionTracker = new ChatGptCompletionTracker();
+    const domHealthTracker = new ChatGptTurnDomHealthTracker();
+    for (;;) {
+      if (page.isClosed()) throw new Error("The research sub-turn's browser tab was closed");
+      if (abortSignal?.aborted) throw new DOMException("Research sub-turn aborted", "AbortError");
+      if (Date.now() >= deadline) {
+        await diagnostics.capture(page, "sub-turn-timeout");
+        throw new Error(`The research sub-turn did not answer within its ${Math.round(timeoutMs / 1000)}s budget`);
+      }
+      await throwIfChatGptRateLimitDialog(page);
+      await throwIfChatGptSessionFailureAlert(page);
+      await throwIfChatGptTerminalErrorAlert(responseTurn);
+      const snapshot = await this.responseDomSnapshot(responseTurn);
+      const running = await page.locator(CHATGPT_STOP_BUTTON_SELECTOR).last().isVisible().catch(() => false);
+      const health = domHealthTracker.update({
+        responsePresent: snapshot.responsePresent,
+        running,
+        currentText: snapshot.visibleText,
+        completionActionVisible: snapshot.completionActionVisible,
+      });
+      if (health) {
+        await diagnostics.capture(page, "sub-turn-dom-error");
+        throw new Error(`Research sub-turn ${traceId}: ${health}`);
+      }
+      if (snapshot.responsePresent && completionTracker.update({
+        responsePresent: snapshot.responsePresent,
+        running,
+        currentText: snapshot.visibleText,
+        currentHtml: snapshot.fullHtml,
+        completionActionVisible: snapshot.completionActionVisible,
+      })) {
+        await diagnostics.capture(page, "sub-turn-complete");
+        // Observed once, here, rather than every poll. A sub-turn streams nothing to Codex, so it
+        // needs no incremental deltas — and observing a transiently empty snapshot (the shape
+        // `responseDomSnapshot` returns when its evaluate times out) would trip the buffer's
+        // committed-prefix assertion and fail the sub-turn over a condition the main loop tolerates.
+        markdownBuffer.observe(snapshot.markdownSegments);
+        const final = markdownBuffer.finish();
+        if (!final.markdown && snapshot.visibleText) {
+          throw new Error("The research sub-turn produced text that could not be serialized as Markdown");
+        }
+        return final.markdown;
       }
       await new Promise(resolveSleep => setTimeout(resolveSleep, 250));
     }

@@ -203,7 +203,7 @@ test("closing the launcher page is an immediate terminal turn error", async () =
 test("connector verification and real tool turns share one Playwright selector", () => {
   const workerSource = readFileSync(new URL("../src/adapters/chatgpt-web/browser-worker.ts", import.meta.url), "utf8");
   expect(workerSource.match(/this\.selectConnector\(page(?:, captureDiagnostic)?\)/g)?.length).toBe(2);
-  expect(workerSource.match(/this\.prepareTemporaryChatSurface\(\s*page/g)?.length).toBe(4);
+  expect(workerSource.match(/this\.prepareTemporaryChatSurface\(\s*page/g)?.length).toBe(5);
   expect(workerSource).toContain('"temporary_chat_preparation"');
   expect(workerSource).toContain('if (page.url() !== CHATGPT_TEMPORARY_CHAT_URL)');
   expect(workerSource).toContain('composer.pressSequentially("@c", { delay: 25 })');

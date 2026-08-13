@@ -21,6 +21,31 @@ default on, document honestly, and commit.
 - Non-functional: README wording keeps the fail-open framing and states quota
   and latency costs plainly; default flips on only after the smoke passes.
 
+## Checks the phase-2 review says only a live run can settle
+
+Fold these into the scenarios below; each one is a condition no unit test in
+this repository can reach, because the worker has no DOM double.
+
+1. **Throttle at send.** Drive sub-turns until ChatGPT's rapid-message dialog
+   appears; the sub-turn must fail fast rather than spin. This is the live proof
+   that the send stage is bounded.
+2. **Parent liveness while the sub tab is foreground.** `context.newPage()`
+   focuses the new tab; confirm the parent keeps streaming and heart-beating,
+   and record the parent's total pending-call duration against the 300 s
+   probe.
+3. **Sub-turn wall time with web search engaged** — the prompt invites search,
+   and searching Luna turns run long. Is 180 s enough?
+4. **Two-tab selector behaviour.** `activeComposer` requires exactly one visible
+   composer; confirm that holds with two ChatGPT tabs open, along with the
+   send-button ancestor lookup and the stop-button locator.
+5. **Model assertion in the sub tab** — `selectModelAndEffort` throws if a model
+   selector appears; confirm the second tab renders the Luna-only composer.
+6. **Markdown transient.** Watch a long multi-paragraph answer for
+   "removed a completed text block"; that string would mean the completion-time
+   observe still sees an empty snapshot.
+7. **Storage-state hygiene.** The sub Temporary Chat must leave no history entry
+   and no changed model preference in the persisted state.
+
 ## Live smoke scenarios
 
 Rebuild first (`docker compose up -d --build`), run with
