@@ -184,6 +184,30 @@ preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3); a turn that would nee
 back to collapse. If a preload delivery fails mid-way, the turn is re-delivered once as a single
 slimmed message, so preload is never worse than collapse.
 
+## The sealed Floor procedure contract
+
+Every non-compaction ChatGPT Web turn carries a short procedure contract ported from
+the local `nousai-qwen-fable-thinking` project: before answering, the Web model is told
+to state the request's actual deliverables, check the answer supplies each one, account
+for unused details, classify factual claims as supported/prior/assumed, argue against
+its own answer once — and then deliver without narrating any of that. Turns with local
+tools attached swap the closing section for one that insists on calling tools instead of
+describing work.
+
+The prose *is* the behavior, so it is sealed: loaded fail-closed against a SHA-256 pin
+([src/adapters/chatgpt-web/procedure/floor-protocol.ts](src/adapters/chatgpt-web/procedure/floor-protocol.ts)).
+Editing [floor-v1.md](src/adapters/chatgpt-web/procedure/floor-v1.md) without updating
+the pin in the same commit stops the bridge at the first turn instead of silently
+changing every answer.
+
+Honest accounting: the cost is measured — **592 tokens per read-only turn, 667 with
+tools** (~2.1–2.4% of the Free ~28k budget) — and the benefit is not: the source
+project itself records "whether the Floor earns its tokens" as untested, and this fork
+has verified only that the block does not break turns (live smoke: checkpoint tail and
+rolling context survive, zero procedure narration in answers). Removing it is a single
+revert of the block insertion in
+[src/adapters/chatgpt-web/prompt.ts](src/adapters/chatgpt-web/prompt.ts).
+
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):
@@ -211,6 +235,10 @@ Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-
   (only in the copy sent to the browser — files on disk and native-model Codex usage are
   never touched). Full mechanism and trade-offs:
   [How Luna context slimming keeps long threads alive](#how-luna-context-slimming-keeps-long-threads-alive).
+- **A sealed Floor procedure contract** rides every non-compaction Web turn — a
+  digest-pinned answer-quality protocol ported from a sibling project. Cost measured,
+  benefit deliberately not oversold:
+  [The sealed Floor procedure contract](#the-sealed-floor-procedure-contract).
 
 Most other upstream bridge behavior — selectors, streaming, compaction, model catalog, and
 security checks — remains unchanged unless noted above.
