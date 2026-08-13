@@ -19,6 +19,14 @@ source: skill
 
 # Sealed Floor procedure protocol for ChatGPT Web turns
 
+> **WITHDRAWN 2026-08-13, one day after shipping.** A controlled A/B/A over 30 live
+> Luna turns measured the block failing roughly two thirds of checkpoint-capturing
+> turns (13 of 20 with it, 0 of 10 without) because its Deliver section forbids exactly
+> the private checkpoint tail the transport requires. Its benefit was never measured
+> anywhere, including upstream. Code, prose, seal, and kill-switch were removed;
+> the plan and reports are kept as the record. Measurement:
+> [reports/phase-04-floor-checkpoint-omission-measurement.md](./reports/phase-04-floor-checkpoint-omission-measurement.md).
+
 ## Overview
 
 Port the essence of `E:\Projects\nousai-qwen-fable-thinking` — the sealed Floor
