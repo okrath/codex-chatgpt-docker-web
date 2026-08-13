@@ -11,6 +11,7 @@ import {
   SerialQueueClosedError,
   buildResearchSubTurnPrompt,
   chatGptSubagentEnabled,
+  chatGptSubagentTimeoutMs,
   describeResearchSubagentFailure,
   resolveResearchSubTurnTimeoutMs,
   shapeResearchSubTurnAnswer,
@@ -62,6 +63,15 @@ test("the timeout clamps to the probe-derived window", () => {
   expect(resolveResearchSubTurnTimeoutMs(600_000)).toBe(RESEARCH_SUBAGENT_TIMEOUT_CAP_MS);
   expect(resolveResearchSubTurnTimeoutMs(1_000)).toBe(RESEARCH_SUBAGENT_TIMEOUT_FLOOR_MS);
   expect(resolveResearchSubTurnTimeoutMs(90_000)).toBe(90_000);
+});
+
+test("the timeout knob is clamped to the same window as any requested timeout", () => {
+  expect(chatGptSubagentTimeoutMs({})).toBe(RESEARCH_SUBAGENT_TIMEOUT_MS);
+  expect(chatGptSubagentTimeoutMs({ CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS: "" })).toBe(RESEARCH_SUBAGENT_TIMEOUT_MS);
+  expect(chatGptSubagentTimeoutMs({ CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS: "nonsense" })).toBe(RESEARCH_SUBAGENT_TIMEOUT_MS);
+  expect(chatGptSubagentTimeoutMs({ CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS: "1000" })).toBe(RESEARCH_SUBAGENT_TIMEOUT_FLOOR_MS);
+  expect(chatGptSubagentTimeoutMs({ CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS: "999999" })).toBe(RESEARCH_SUBAGENT_TIMEOUT_CAP_MS);
+  expect(chatGptSubagentTimeoutMs({ CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS: "20000" })).toBe(20_000);
 });
 
 test("an oversized answer is capped and flagged rather than silently cut", () => {

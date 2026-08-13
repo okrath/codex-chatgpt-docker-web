@@ -31,6 +31,7 @@ import { toChatGptWebTransportPlan, type PreparedChatGptWebPrompt } from "./tran
 import { deliverPreambleParts } from "./browser-transport";
 import {
   buildResearchSubTurnPrompt,
+  chatGptSubagentTimeoutMs,
   RESEARCH_SUBAGENT_MAX_QUEUE_DEPTH,
   ResearchSubagentBusyError,
   resolveResearchSubTurnTimeoutMs,
@@ -1214,7 +1215,9 @@ export class ChatGptBrowserWorker {
       );
     }
     const prompt = buildResearchSubTurnPrompt(request.question);
-    const timeoutMs = resolveResearchSubTurnTimeoutMs(request.timeoutMs);
+    const timeoutMs = request.timeoutMs === undefined
+      ? chatGptSubagentTimeoutMs()
+      : resolveResearchSubTurnTimeoutMs(request.timeoutMs);
     const traceId = `${request.parentTraceId}-sub${request.index}`;
     return await this.researchSubTurns.run(() => this.executeResearchSubTurn(traceId, prompt, timeoutMs, request));
   }

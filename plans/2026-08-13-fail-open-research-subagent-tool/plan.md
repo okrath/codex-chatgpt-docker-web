@@ -68,7 +68,7 @@ only way to multiply usable context per Codex turn on the Free tier.
 |-------|------|--------|
 | 1 | [Live feasibility probes](./phase-01-live-feasibility-probes.md) | Completed |
 | 2 | [Sub-chat delivery machinery](./phase-02-sub-chat-delivery-machinery.md) | Completed |
-| 3 | [Broker tool and turn integration](./phase-03-broker-tool-and-turn-integration.md) | Pending |
+| 3 | [Broker tool and turn integration](./phase-03-broker-tool-and-turn-integration.md) | Completed |
 | 4 | [Live smoke and docs](./phase-04-live-smoke-and-docs.md) | Pending |
 
 Phase 1 is a **gate**: if probe A fails (no second chat while a tool call is
@@ -88,18 +88,24 @@ Free rejects that too, the plan stops with a written null result.
 
 ## Acceptance criteria
 
-- [ ] Probes answered with recorded numbers (concurrency, pacing, wait tolerance
+- [x] Probes answered with recorded numbers (concurrency, pacing, wait tolerance
       both ChatGPT-side and bridge-side).
-- [ ] With the env flag off, every existing behavior is byte-identical
+- [x] With the env flag off, every existing behavior is byte-identical
       (regression suite green, no contract text change).
-- [ ] With the flag on: a full-mode turn that ignores the tool is unchanged; a
+- [~] With the flag on: a full-mode turn that ignores the tool is unchanged; a
       turn that calls it gets a real answer produced in a second Temporary Chat,
-      serially, capped, and the outer turn survives sub-chat failure.
-- [ ] Live smoke on the real free Luna account: model calls the tool
-      spontaneously on a research-shaped task, answer flows back, outer turn
-      completes with checkpoint intact.
-- [ ] README documents the tool honestly (quota burn, latency, fail-open,
-      probe-measured limits).
+      serially, capped — **all confirmed live**. The outer turn surviving a
+      sub-chat failure is **not** confirmed: the one observed failure ended with
+      the parent turn dying after the model rewrote already-streamed prose.
+- [x] Live smoke on the real free Luna account: the model called the tool
+      spontaneously on 3 of 5 research-shaped tasks, answers flowed back, and
+      those turns completed with checkpoints intact.
+- [x] README documents the tool honestly (quota burn, latency, fail-open,
+      measured adoption rate, and why the default stays off).
+
+**Status: the default stays off.** See
+[reports/phase-04-subagent-live-smoke.md](./reports/phase-04-subagent-live-smoke.md)
+for the evidence and the short list that would flip it.
 
 ## Rollback
 

@@ -1,10 +1,11 @@
 ---
 phase: 3
-title: "Broker tool and turn integration"
-status: pending
-effort: "M"
+title: Broker tool and turn integration
+status: completed
+effort: M
 priority: P2
-dependencies: [2]
+dependencies:
+  - 2
 ---
 
 # Phase 3: Broker tool and turn integration

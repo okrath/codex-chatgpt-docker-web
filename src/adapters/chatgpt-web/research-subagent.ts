@@ -117,6 +117,18 @@ export function resolveResearchSubTurnTimeoutMs(requestedMs?: number): number {
 }
 
 /**
+ * Tuning knob, clamped to the same window as any other requested timeout. It exists mainly so a
+ * smoke can drive the failure path deliberately instead of waiting for one, and so the default can
+ * be retuned once live runs show how long a real research answer takes.
+ */
+export function chatGptSubagentTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.CODEX_CHATGPT_WEB_SUBAGENT_TIMEOUT_MS?.trim();
+  if (!raw) return RESEARCH_SUBAGENT_TIMEOUT_MS;
+  const value = Number.parseInt(raw, 10);
+  return resolveResearchSubTurnTimeoutMs(Number.isFinite(value) ? value : undefined);
+}
+
+/**
  * The sub-chat's whole contract. It is short on purpose.
  *
  * A prompt contract that contradicts another contract in the same message is not a drafting slip,

@@ -184,6 +184,29 @@ preload is capped at `LUNA_PRELOAD_MAX_PARTS` (default 3); a turn that would nee
 back to collapse. If a preload delivery fails mid-way, the turn is re-delivered once as a single
 slimmed message, so preload is never worse than collapse.
 
+## Research sub-turns (experimental, off by default)
+
+Every Codex turn is delivered as one browser message bounded by the account's per-message
+limit, so a turn whose own context already fills that budget has no room to pull in
+anything new. With `CODEX_CHATGPT_WEB_SUBAGENT=on`, a tool-capable turn may answer one
+scoped question in a **second Temporary Chat** — a fresh budget — while it waits on the
+tool call that asked. The answer comes back as an ordinary tool result.
+
+It is entirely optional: the model is told the tool exists and decides for itself. In the
+live smoke it reached for it on 3 of 5 research-shaped tasks and answered unaided on the
+other 2, with a real sub-turn taking about 12 seconds. Bounds: at most 3 per turn, one at
+a time with no queueing, questions capped at 16,000 characters, answers at 32,000. The
+sub-chat gets no Codex tools and no access to your machine; it can use ChatGPT's own web
+search, so treat its findings as data to weigh rather than as instructions, which is what
+the tool result says on its face.
+
+**Why it ships disabled.** Every call spends an extra message on your account, and one
+observed sub-turn failure took the parent turn down with it — the model had already
+streamed prose, rewrote it after the error, and the bridge refuses a rewritten block it
+has already sent to Codex. That happened once and could not be reproduced, which is
+exactly why the default waits. Details and what would change it:
+[reports/phase-04-subagent-live-smoke.md](plans/2026-08-13-fail-open-research-subagent-tool/reports/phase-04-subagent-live-smoke.md).
+
 ## What this fork changes
 
 Compared to upstream [miuuyy/codex-chatgpt-web](https://github.com/miuuyy/codex-chatgpt-web):
