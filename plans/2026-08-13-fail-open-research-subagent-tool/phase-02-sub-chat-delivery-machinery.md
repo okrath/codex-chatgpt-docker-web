@@ -1,10 +1,11 @@
 ---
 phase: 2
-title: "Sub-chat delivery machinery"
-status: pending
-effort: "M"
+title: Sub-chat delivery machinery
+status: completed
+effort: M
 priority: P2
-dependencies: [1]
+dependencies:
+  - 1
 ---
 
 # Phase 2: Sub-chat delivery machinery
@@ -103,12 +104,14 @@ delivery mechanics:
 
 ## Success Criteria
 
-- [ ] Full suite green with the feature completely unused (no behavior change)
-- [ ] Sub-turn entry point exercises only its own page; lock enforces serial
-      execution under a concurrent-call test
-- [ ] Prompt assembly tests pin the contract text, Floor inclusion, and both
-      caps
-- [ ] `bunx tsc --noEmit` clean
+- [x] Full suite green with the feature completely unused (361 pass, 0 fail)
+- [x] Sub-turn entry point exercises only its own page; the queue enforces
+      serial execution and FIFO order under a concurrent-call test
+- [x] Prompt assembly tests pin the contract text, both caps, and the absence
+      of any instruction that would forbid a required output tail
+- [x] `bunx tsc --noEmit` clean
+- [x] Every stage bounded, abort honoured before spending a message, shutdown
+      drains the queue (all four raised by review before commit)
 
 ## Risk Assessment
 

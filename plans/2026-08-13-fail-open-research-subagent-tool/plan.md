@@ -56,7 +56,7 @@ only way to multiply usable context per Codex turn on the Free tier.
 | Discovery | One sentence in the full-mode transport contract; no schema/inventory change |
 | Question contract | Self-contained: the caller quotes whatever context the sub-agent needs into `question` (the main model already holds the context). Bridge-side slicing of broker RAM is explicitly deferred. |
 | Sub-agent prompt | Bridge-authored browser-only contract + the question, fenced. No tools, no turn token, no checkpoint contract, no Codex context envelope. (The sealed Floor block was originally planned here; it was measured harmful and removed from the repo on 2026-08-13, so the sub-turn prompt carries no procedure block — and, per that lesson, must never carry prose that contradicts another contract in the same message.) |
-| Budget guards | `question` capped so contract + Floor + question ≤ the Luna transport budget; answer capped at 32,000 chars (mirrors `HISTORY_LOAD_RESPONSE_CHAR_CAP`), truncation flagged in the result |
+| Budget guards | `question` capped at 16,000 characters, chosen so even the densest script stays inside the per-message budget without a separate token guard; answer capped at 32,000 chars (mirrors `HISTORY_LOAD_RESPONSE_CHAR_CAP`), truncation flagged in the result |
 | Concurrency | Serial only; one sub-chat at a time; max `3` calls per turn (counter in turn-scoped broker state) |
 | Rollout | Behind `CODEX_CHATGPT_WEB_SUBAGENT` **default off**; flipped on only after phase-4 live smoke (the preload-productionization precedent) |
 | Scope guard | Sub-agent is read-only browser-only: it can use ChatGPT-native web search but has no Codex Native tools — the feature adds zero local-access surface |
@@ -67,7 +67,7 @@ only way to multiply usable context per Codex turn on the Free tier.
 | Phase | Name | Status |
 |-------|------|--------|
 | 1 | [Live feasibility probes](./phase-01-live-feasibility-probes.md) | Completed |
-| 2 | [Sub-chat delivery machinery](./phase-02-sub-chat-delivery-machinery.md) | Pending |
+| 2 | [Sub-chat delivery machinery](./phase-02-sub-chat-delivery-machinery.md) | Completed |
 | 3 | [Broker tool and turn integration](./phase-03-broker-tool-and-turn-integration.md) | Pending |
 | 4 | [Live smoke and docs](./phase-04-live-smoke-and-docs.md) | Pending |
 
@@ -79,10 +79,12 @@ Free rejects that too, the plan stops with a written null result.
 ## Dependencies
 
 - Builds on committed machinery: turn-broker reserved wire names + turn-scoped
-  state (`history-recall.ts` precedent), browser-worker Temporary Chat
-  preparation, `buildFloorProcedureBlock` (2ef97d7).
-- No unfinished plan touches these files; `2026-08-12-sealed-floor-procedure-protocol`
-  is completed.
+  state (`history-recall.ts` precedent) and the browser worker's Temporary Chat
+  preparation, model assertion, prompt attachment, and submission-acceptance
+  helpers, which the sub-turn composes rather than copies.
+- No unfinished plan touches these files. `2026-08-12-sealed-floor-procedure-protocol`
+  is closed as withdrawn, and its lesson is a constraint here: the sub-turn
+  prompt must never contradict another contract in the same message.
 
 ## Acceptance criteria
 
