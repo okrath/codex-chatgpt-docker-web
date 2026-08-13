@@ -243,6 +243,10 @@ export function compileChatGptWebPrompt(
     ? [
       "For local work required by the task, use the attached Codex Native tools directly according to their declared descriptions and schemas.",
       "Use actual Codex Native results as evidence for local observations and effects, and keep calling tools until the requested work is complete and verified.",
+      // The attached set includes a registry search and a generic call, so browsers, screenshots, and
+      // every other configured MCP or app tool are reachable — but only if the model looks. Left
+      // unsaid, it answered from its own assumptions and told users a capability was not provided.
+      "The attached tools include a search over the exact tool registry this Codex turn advertises, including configured MCP and app tools, and a generic call for any tool that search returns. Run that search before reporting a capability as unavailable, and report one missing only when the search does not return it.",
     ]
     : [
       `This is ChatGPT Web ${mode.displayLabel} with no Codex Native bridge to the user's local computer attached to this response. This restriction applies only to local Codex files, commands, processes, and computer mutations.`,

@@ -46,6 +46,9 @@ test("tool-capable prompts pass one stable turn token directly to native actions
   expect(compiled.text).toContain("[retired turn handle]");
   expect(transportOnly).toContain("For local work required by the task, use the attached Codex Native tools directly according to their declared descriptions and schemas.");
   expect(transportOnly).toContain("Use actual Codex Native results as evidence for local observations and effects, and keep calling tools until the requested work is complete and verified.");
+  // Registry search is described by behaviour, never by tool name: the assertions below still forbid
+  // naming connector tools, and the model reads their real names from the attached schemas.
+  expect(transportOnly).toContain("The attached tools include a search over the exact tool registry this Codex turn advertises, including configured MCP and app tools, and a generic call for any tool that search returns. Run that search before reporting a capability as unavailable, and report one missing only when the search does not return it.");
   expect(transportOnly).toContain(`The task context is complete. Pass turn_token ${token} unchanged to every Codex Native call in this response, including continuations after tool results; do not expose it in the answer. Execute the latest active user request now.`);
   expect(transportOnly).not.toMatch(/codex_bind_turn|binding_id|outer_tool_gateway|command_tool/);
   expect(transportOnly).not.toMatch(/codex_exec|codex_write_stdin|codex_apply_patch|codex_view_image|codex_tool_inventory|codex_tool_call/);
