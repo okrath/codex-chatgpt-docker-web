@@ -53,6 +53,9 @@ test("tool-capable prompts pass one stable turn token directly to native actions
   // running one command, on a machine that had one. Evidence and host shape are both pinned here.
   expect(transportOnly).toContain("Say only what a Codex Native result in this turn actually shows about this computer — what exists, what can run, and whether a change works. Run the check before you describe its outcome; when you have not run one, say you did not check instead of asserting what the machine has, lacks, or proves.");
   expect(transportOnly).toContain("Match commands and paths to the operating system that the workspace paths in the task context identify. A probe written for a different operating system that finds nothing is not evidence of absence; retry it in the form this host expects before concluding anything is missing.");
+  // One refused destructive command was generalised into "every tool is blocked", and the next turn
+  // was spent asking for a working one. A live probe reproduces that from the rejection alone.
+  expect(transportOnly).toContain("A refused tool call is refused on its own terms: the refusal covers that exact command, never the tool, the other commands, or this turn. Continue with a narrower or non-destructive command instead of telling the user the tools are unavailable or asking for a turn in which they work.");
   expect(transportOnly).toContain(`The task context is complete. Pass turn_token ${token} unchanged to every Codex Native call in this response, including continuations after tool results; do not expose it in the answer. Execute the latest active user request now.`);
   expect(transportOnly).not.toMatch(/codex_bind_turn|binding_id|outer_tool_gateway|command_tool/);
   expect(transportOnly).not.toMatch(/codex_exec|codex_write_stdin|codex_apply_patch|codex_view_image|codex_tool_inventory|codex_tool_call/);

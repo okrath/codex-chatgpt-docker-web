@@ -66,6 +66,38 @@ wrong … help.openai.com" copy, so on a Vietnamese UI nothing matched and the t
 changed" — a misleading terminal error for a retryable upstream one. The regenerate control's test id
 does not localise, so it is now the signal, and the turn fails retryable with an accurate message.
 
+## Follow-up from the live session: one refused command read as "every tool is refused"
+
+The next real turn reported that "the workspace commands/tools in this turn were stopped by a safety
+check before it could read the project", and asked for a turn where tools work. The bridge stopped
+nothing: that turn ran all fifteen stages, attached the connector, and the model then made **zero**
+tool calls. The replayed history explains it — an earlier turn had tried
+
+```
+powershell.exe -Command "if (Test-Path 'server') { Remove-Item -LiteralPath 'server' -Recurse -Force }; …"
+```
+
+on the project's own server directory, and Codex answered `rejected: blocked by policy`. One refused
+destructive command became "all tools are unavailable this turn".
+
+Reproduced from that history alone, and fixed:
+
+| Probe | Build | Result |
+|---|---|---|
+| `pol1` | before | `NO=không kiểm tra được vì lệnh đọc workspace bị safety check chặn`, zero commands |
+| `pol2` | after | ran the check, answered `OK=realtime server đang listen port 8787` |
+
+The added line says a refusal covers the command that was refused, never the tool, the other
+commands, or the turn — and that the answer is a narrower command, not a request for a different
+turn. Its first wording used the word "blocked", which the tool-capable prompt forbids along with
+"expired", "revoked", "safety" and "permission gate"; the repo's own contract test caught it, and the
+rule was reworded rather than the guard weakened.
+
+Also seen once in the same session and left alone: an attempt failed with
+`waitFor: Timeout 10000ms exceeded` while waiting for the selected-connector chip after clicking it in
+the mention menu. Codex re-delivered the turn and the retry attached the connector normally, so this
+is a transient UI wait, not a defect with evidence behind it yet.
+
 ## Honest limits
 
 Each probe run is n=1, and the host is emulated: a real screenshot on the real machine was taken by

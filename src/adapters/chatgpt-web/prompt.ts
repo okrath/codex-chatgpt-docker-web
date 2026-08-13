@@ -259,6 +259,10 @@ export function compileChatGptWebPrompt(
       // a headless-capable browser installed. The command tool runs arbitrary local programs, so the
       // absence of a purpose-built tool says nothing about whether the host can do the work.
       "The command tool runs any program installed on this host, so a missing purpose-built tool does not make the work impossible: look for a program that already does it before reporting that the request cannot be carried out.",
+      // One `rejected: blocked by policy` on a recursive delete was generalised into "every workspace
+      // tool is blocked by a safety check", and the next turn spent itself asking for a turn where
+      // tools work — with no call attempted. A refusal is about the command that was refused.
+      "A refused tool call is refused on its own terms: the refusal covers that exact command, never the tool, the other commands, or this turn. Continue with a narrower or non-destructive command instead of telling the user the tools are unavailable or asking for a turn in which they work.",
     ]
     : [
       `This is ChatGPT Web ${mode.displayLabel} with no Codex Native bridge to the user's local computer attached to this response. This restriction applies only to local Codex files, commands, processes, and computer mutations.`,
