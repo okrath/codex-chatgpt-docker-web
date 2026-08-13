@@ -5,6 +5,7 @@ import {
   CHATGPT_LUNA_CHECKPOINT_MARKER,
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
 } from "./rolling-checkpoint";
+import { buildFloorProcedureBlock } from "./procedure/floor-protocol";
 
 export interface ChatGptWebPromptImage {
   ref: string;
@@ -251,6 +252,15 @@ export function compileChatGptWebPrompt(
       "Do not claim a new local inspection, command, edit, or verification unless it actually appears in the task history. If the latest request requires fresh local-computer access or a local mutation, state only that exact limitation instead of inventing success.",
       "Otherwise perform the full requested research, analysis, or synthesis with every capability actually available to you; do not stop at a plan or progress report.",
     ];
+  /**
+   * The sealed Floor procedure (ported from nousai-qwen-fable-thinking). A compaction turn is a
+   * summarization contract with no answer to run a procedure over, so it carries none; every other
+   * Web turn gets the full sealed prose, with the Deliver section swapped for its tool-capable
+   * variant when Codex Native tools are attached.
+   */
+  const procedureContract = parsed._compactionRequest
+    ? []
+    : buildFloorProcedureBlock({ localTools: mode.localTools });
   const checkpointContract = captureLunaCheckpoint
     ? [
       "After the complete user-facing answer, append one private rolling task checkpoint for the next Luna turn.",
@@ -294,6 +304,7 @@ export function compileChatGptWebPrompt(
     const text = [
       ...sharedContract,
       ...transportContract,
+      ...procedureContract,
       ...checkpointContract,
       captureLunaCheckpoint
         ? "Return the complete answer that the outer Codex task should receive, then the required private checkpoint tail."

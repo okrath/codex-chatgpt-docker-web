@@ -380,6 +380,81 @@ test("uses the public Instant name without leaking the browser menu alias into t
   expect(compiled.text).not.toContain("Instant 5.5");
 });
 
+test("read-only turns carry the sealed Floor procedure with the adapted plain Deliver", () => {
+  const compiled = compileChatGptWebPrompt(
+    request("max"),
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+  );
+
+  const transportLine = compiled.text.indexOf("no Codex Native bridge to the user's local computer");
+  const procedureHeader = compiled.text.indexOf("[Fable procedure floor-v1]");
+  const contextEnvelope = compiled.text.indexOf("<codex_context_json>");
+  expect(procedureHeader).toBeGreaterThan(transportLine);
+  expect(contextEnvelope).toBeGreaterThan(procedureHeader);
+  expect(compiled.text).toContain("adds no new task and no new facts");
+  expect(compiled.text).toContain("transport obligations, not narration");
+  expect(compiled.text).not.toContain("Call the tools.");
+});
+
+test("tool-capable turns swap the Floor's Deliver section for Deliver-with-tools", () => {
+  const compiled = compileChatGptWebPrompt(
+    request("high"),
+    { localToolsEnabled: true, solAvailable: true, proAvailable: true },
+    "turn_12345678901234567890123456789012",
+  );
+
+  expect(compiled.text).toContain("[Fable procedure floor-v1]");
+  expect(compiled.text).toContain("Call the tools.");
+  expect(compiled.text).toContain("transport obligations, not narration");
+  expect(compiled.text).not.toContain("The reader asked a question");
+});
+
+test("compaction turns carry no Floor procedure because there is no answer to run it over", () => {
+  const compact = request("high");
+  compact._compactionRequest = true;
+  const compiled = compileChatGptWebPrompt(
+    compact,
+    { localToolsEnabled: false, solAvailable: true, proAvailable: true },
+  );
+
+  expect(compiled.text).not.toContain("[Fable procedure");
+});
+
+test("Luna checkpoint turns keep both the Floor procedure and the checkpoint contract, procedure first", () => {
+  const luna = request("low");
+  luna.modelId = CHATGPT_WEB_LUNA_MODEL_ID;
+  const compiled = compileChatGptWebPrompt(
+    luna,
+    { localToolsEnabled: false, solAvailable: false, proAvailable: false },
+    undefined,
+    { captureLunaCheckpoint: true },
+  );
+
+  const procedureHeader = compiled.text.indexOf("[Fable procedure floor-v1]");
+  const checkpointContract = compiled.text.indexOf("append one private rolling task checkpoint");
+  expect(procedureHeader).toBeGreaterThan(0);
+  expect(checkpointContract).toBeGreaterThan(procedureHeader);
+  expect(compiled.text).toContain("transport obligations, not narration");
+});
+
+test("Full-mode Luna checkpoint turns keep the tail deferral inside Deliver-with-tools", () => {
+  const luna = request("low");
+  luna.modelId = CHATGPT_WEB_LUNA_MODEL_ID;
+  const compiled = compileChatGptWebPrompt(
+    luna,
+    { localToolsEnabled: true, solAvailable: false, proAvailable: false },
+    "turn_12345678901234567890123456789012",
+    { captureLunaCheckpoint: true },
+  );
+
+  const procedureHeader = compiled.text.indexOf("[Fable procedure floor-v1]");
+  const checkpointContract = compiled.text.indexOf("append one private rolling task checkpoint");
+  expect(procedureHeader).toBeGreaterThan(0);
+  expect(checkpointContract).toBeGreaterThan(procedureHeader);
+  expect(compiled.text).toContain("Call the tools.");
+  expect(compiled.text).toContain("transport obligations, not narration");
+});
+
 test("keeps large contexts intact in the inline text envelope", () => {
   const token = "turn_12345678901234567890123456789012";
   const largeContent = "x".repeat(600_000);
