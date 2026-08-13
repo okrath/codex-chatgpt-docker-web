@@ -84,6 +84,34 @@ interface BrokerResponse {
 const brokers = new Map<string, TurnBroker>();
 const MAX_BROKER_LINE_CHARS = 67_108_864;
 const MAX_RETIRED_TURN_HANDLES = 64;
+/**
+ * How far a presented token may sit from the one live turn's token and still be treated as a copy of
+ * it. The model transcribes 32 opaque characters by hand into every call; measured failures were a
+ * dropped character and a single substitution, and telling it to re-read did not help, because it
+ * retyped the same wrong value. Two edits covers the observed damage while staying far below the
+ * distance between two independently generated tokens.
+ */
+const MAX_TOKEN_TYPO_DISTANCE = 2;
+
+/** Levenshtein distance, abandoned as soon as it cannot come in at or under `limit`. */
+function boundedEditDistance(left: string, right: string, limit: number): number | undefined {
+  if (Math.abs(left.length - right.length) > limit) return undefined;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    let best = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const substitution = previous[rightIndex - 1]! + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1);
+      const distance = Math.min(substitution, previous[rightIndex]! + 1, current[rightIndex - 1]! + 1);
+      current.push(distance);
+      if (distance < best) best = distance;
+    }
+    if (best > limit) return undefined;
+    previous = current;
+  }
+  const distance = previous[right.length]!;
+  return distance <= limit ? distance : undefined;
+}
 
 export async function closeTurnBrokers(): Promise<void> {
   const active = [...brokers.values()];
@@ -264,6 +292,22 @@ export class TurnBroker {
     this.retire(this.retiredTokens, token, channel.traceId);
     channel.collapsedHistory = undefined;
     this.rejectChannel(channel, new Error("Codex turn binding was revoked"));
+  }
+
+  /**
+   * Bind a call whose token is a corrupted copy of the only live turn's token. Ambiguity is the whole
+   * risk, so this requires exactly one live, unfinalized turn: with a single candidate there is no
+   * other turn the call could be stolen from, and refusing instead costs the turn — the model retypes
+   * the same wrong value when told to try again.
+   */
+  private recoverMistypedToken(token: string): { token: string; channel: TurnChannel; distance: number } | undefined {
+    const live = [...this.channels].filter(([, channel]) => !channel.finalized);
+    if (live.length !== 1) return undefined;
+    const [candidate, channel] = live[0]!;
+    const distance = boundedEditDistance(token, candidate, MAX_TOKEN_TYPO_DISTANCE);
+    return distance === undefined || distance === 0
+      ? undefined
+      : { token: candidate, channel, distance };
   }
 
   private retire(history: Map<string, string>, handle: string, traceId: string): void {
@@ -483,13 +527,26 @@ export class TurnBroker {
     if (request.method === "claim") {
       const token = request.token;
       if (typeof token !== "string" || token.length === 0) throw new Error("turn token is required");
-      const channel = this.channels.get(token);
-      const retiredTurn = channel ? undefined : this.retiredTokens.get(token);
+      const exact = this.channels.get(token);
+      const retiredTurn = exact ? undefined : this.retiredTokens.get(token);
+      // An exact retired token identifies its turn for certain, so it keeps its own answer; only a
+      // token that matches nothing at all is a candidate for typo recovery.
+      const recovered = exact || retiredTurn !== undefined ? undefined : this.recoverMistypedToken(token);
+      const channel = exact ?? recovered?.channel;
+      const claimedToken = exact ? token : recovered?.token ?? token;
       const liveTurns = this.channels.size;
       console.error(
         `[chatgpt-web] broker claim received (tokenChars=${token.length}, valid=${Boolean(channel)}`
+        + `${recovered ? `, recoveredTypo=${recovered.distance}` : ""}`
         + `${channel ? "" : `, retiredTurn=${retiredTurn ?? "unknown"}, liveTurns=${liveTurns}`})`,
       );
+      if (recovered) {
+        console.warn(
+          `[chatgpt-web] broker trace=${recovered.channel.traceId} accepted a turn_token that differs from`
+          + ` the issued one by ${recovered.distance} character(s); it is the only live turn, so the call`
+          + " was bound to it instead of failing the turn",
+        );
+      }
       if (!channel) {
         throw new Error(retiredTurn !== undefined
           ? `This turn_token was issued for ${retiredTurnLabel(retiredTurn)}, which has already finished.`
@@ -523,7 +580,7 @@ export class TurnBroker {
       if (channel.finalized) throw new Error("Codex turn is already finalized");
       if (channel.bindingId) {
         const existing = this.bindings.get(channel.bindingId);
-        if (!existing || existing.token !== token || existing.channel !== channel) {
+        if (!existing || existing.token !== claimedToken || existing.channel !== channel) {
           throw new Error("turn token binding state is inconsistent");
         }
         return {
@@ -531,10 +588,10 @@ export class TurnBroker {
           environment: channel.environment,
         };
       }
-      this.pending.delete(token);
+      this.pending.delete(claimedToken);
       const bindingId = opaqueId("binding");
       channel.bindingId = bindingId;
-      this.bindings.set(bindingId, { token, channel });
+      this.bindings.set(bindingId, { token: claimedToken, channel });
       return {
         bindingId,
         environment: channel.environment,

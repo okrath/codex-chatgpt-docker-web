@@ -247,6 +247,18 @@ export function compileChatGptWebPrompt(
       // every other configured MCP or app tool are reachable — but only if the model looks. Left
       // unsaid, it answered from its own assumptions and told users a capability was not provided.
       "The attached tools include a search over the exact tool registry this Codex turn advertises, including configured MCP and app tools, and a generic call for any tool that search returns. Run that search before reporting a capability as unavailable, and report one missing only when the search does not return it.",
+      // The registry search alone was read as licence to conclude anything: one turn searched the
+      // registry, then told the user the computer had no browser installed at all — a claim it never
+      // ran a single command to test, on a machine that had one. The read-only contract already
+      // forbids inventing local observations; a turn holding the tools has no excuse for it.
+      "Say only what a Codex Native result in this turn actually shows about this computer — what exists, what can run, and whether a change works. Run the check before you describe its outcome; when you have not run one, say you did not check instead of asserting what the machine has, lacks, or proves.",
+      // The false denial came from probing a Windows host with POSIX names: `which chromium`, a
+      // python heredoc, `ls -la`. Nothing found, so it reported nothing installed.
+      "Match commands and paths to the operating system that the workspace paths in the task context identify. A probe written for a different operating system that finds nothing is not evidence of absence; retry it in the form this host expects before concluding anything is missing.",
+      // "No screenshot tool is attached" was reported as "a screenshot is impossible", on a host with
+      // a headless-capable browser installed. The command tool runs arbitrary local programs, so the
+      // absence of a purpose-built tool says nothing about whether the host can do the work.
+      "The command tool runs any program installed on this host, so a missing purpose-built tool does not make the work impossible: look for a program that already does it before reporting that the request cannot be carried out.",
     ]
     : [
       `This is ChatGPT Web ${mode.displayLabel} with no Codex Native bridge to the user's local computer attached to this response. This restriction applies only to local Codex files, commands, processes, and computer mutations.`,

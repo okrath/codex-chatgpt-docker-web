@@ -85,8 +85,11 @@ during an active task to interrupt it.
 
 A refused token does not imply a restart, though. The model retypes those 37 characters into
 every call, so an unknown token while this same process still holds a live turn is a corrupted
-copy, and the broker says that instead: re-read the token from the turn's own prompt and retry
-the call. `liveTurns` in the `broker claim received` log line separates the two readings.
+copy. Telling it to re-read the token was not enough — it retyped the same wrong value — so a
+copy within two characters of the issued token is now bound to that turn whenever exactly one
+turn is live, logged as `recoveredTypo=N`. Two live turns make the nearest match a guess that
+could hand one turn's workspace authority to another, so exactness is required again there, and
+`liveTurns` in the `broker claim received` line separates every reading.
 
 ## Storage layout
 

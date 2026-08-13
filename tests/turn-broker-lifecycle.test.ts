@@ -283,6 +283,49 @@ test("an unbounded broker call outlives the bounded default timeout", async () =
   }
 }, 15_000);
 
+test("turn broker binds a mistyped copy of the only live turn's token, and refuses once two turns are live", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cgw-broker-typo-"));
+  const socketPath = defaultBrokerEndpoint(root);
+  const broker = TurnBroker.forSocket(socketPath);
+  const environment = {
+    cwd: root,
+    roots: [root],
+    writableRoots: [root],
+    sandboxPolicy: { type: "dangerFullAccess" as const },
+    tools: [],
+  };
+  try {
+    const first = await broker.register(environment, 60_000, "turn-typo");
+    // The model retypes 32 opaque characters into every call and drops one; told to re-read the token
+    // it retyped the same wrong value, so refusing here costs the turn for a single character.
+    const dropped = `${first.slice(0, 12)}${first.slice(13)}`;
+    const recovered = await callTurnBroker<{ bindingId: string; environment: { cwd: string } }>(
+      socketPath,
+      { method: "claim", token: dropped },
+    );
+    expect(recovered.bindingId).toStartWith("binding_");
+    expect(recovered.environment.cwd).toBe(root);
+    // The same binding, so a recovered claim joins the turn it meant instead of opening a second one.
+    const exact = await callTurnBroker<{ bindingId: string }>(socketPath, { method: "claim", token: first });
+    expect(exact.bindingId).toBe(recovered.bindingId);
+
+    // Two live turns make the nearest match a guess, and guessing would hand one turn's workspace
+    // authority to another. Exactness is required again.
+    await broker.register(environment, 60_000, "turn-typo-second");
+    let ambiguous = "";
+    try {
+      await callTurnBroker(socketPath, { method: "claim", token: dropped });
+    } catch (error) {
+      ambiguous = error instanceof Error ? error.message : String(error);
+    }
+    expect(ambiguous).toContain("not one the running bridge process issued");
+    expect(ambiguous).toContain("2 live Codex turns");
+  } finally {
+    await broker.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("turn broker names the finished turn that owns a replayed handle", async () => {
   const root = mkdtempSync(join(tmpdir(), "cgw-broker-"));
   const socketPath = defaultBrokerEndpoint(root);
@@ -295,12 +338,12 @@ test("turn broker names the finished turn that owns a replayed handle", async ()
       sandboxPolicy: { type: "dangerFullAccess" },
       tools: [],
     }, 60_000, "turn-alpha");
-    // A corrupted copy of a live token, while this process still holds that turn, must read as the
-    // copy error it is and send the model back to the token in its own prompt. Calling it a restart
-    // cost the whole turn: the model believed the workspace was gone and stopped to ask the user.
+    // A token too damaged to attribute to the live turn, while this process still holds one, must
+    // read as the copy error it is and send the model back to the token in its own prompt. Calling it
+    // a restart cost the whole turn: the model believed the workspace was gone and stopped to ask.
     let mistypedToken = "";
     try {
-      await callTurnBroker(socketPath, { method: "claim", token: ` ${token}` });
+      await callTurnBroker(socketPath, { method: "claim", token: `${token.slice(0, -6)}ZZZZZZ` });
     } catch (error) {
       mistypedToken = error instanceof Error ? error.message : String(error);
     }

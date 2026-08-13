@@ -682,9 +682,13 @@ test("effort selection handles the known ChatGPT rate-limit dialog before keyboa
   expect(selectionSource).not.toContain("is unavailable");
 });
 
-function dialogPage(text: string): { page: Page; pressed: string[] } {
+function dialogPage(text: string, options: { threadErrorControl?: boolean } = {}): { page: Page; pressed: string[] } {
   let matches = true;
   const pressed: string[] = [];
+  const threadErrorButton = {
+    last: () => threadErrorButton,
+    isVisible: async () => options.threadErrorControl === true,
+  };
   const button = {
     last: () => button,
     isVisible: async () => matches,
@@ -701,7 +705,9 @@ function dialogPage(text: string): { page: Page; pressed: string[] } {
   };
   return {
     page: {
-      locator: () => dialog,
+      locator: (selector: string) => (
+        selector.includes("regenerate-thread-error-button") ? threadErrorButton : dialog
+      ),
       getByText: (hasText: string | RegExp) => dialog.filter({ hasText }),
     } as unknown as Page,
     pressed,
@@ -741,6 +747,23 @@ test("the known terminal ChatGPT error alert returns a structured retryable fail
     retryable: true,
   });
   expect(fixture.pressed).toEqual([]);
+});
+
+test("a localised ChatGPT response failure is caught by its regenerate control, not its English copy", async () => {
+  // The turn that surfaced this ran on a Vietnamese UI: the copy never matched, the failure went
+  // unnoticed, and the turn died claiming the ChatGPT DOM had changed.
+  const localised = dialogPage("Đã xảy ra lỗi khi tạo phản hồi.", { threadErrorControl: true });
+
+  await expect(throwIfChatGptTerminalErrorAlert(localised.page)).rejects.toMatchObject({
+    name: "ChatGptWebAdapterError",
+    status: 502,
+    errorType: "server_error",
+    code: "upstream_server_error",
+    retryable: true,
+  });
+
+  const healthy = dialogPage("A complete assistant answer.");
+  await throwIfChatGptTerminalErrorAlert(healthy.page);
 });
 
 test("a failed subscription fetch is retryable and does not falsely invalidate ChatGPT login", async () => {

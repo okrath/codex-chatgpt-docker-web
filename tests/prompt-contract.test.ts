@@ -49,6 +49,10 @@ test("tool-capable prompts pass one stable turn token directly to native actions
   // Registry search is described by behaviour, never by tool name: the assertions below still forbid
   // naming connector tools, and the model reads their real names from the attached schemas.
   expect(transportOnly).toContain("The attached tools include a search over the exact tool registry this Codex turn advertises, including configured MCP and app tools, and a generic call for any tool that search returns. Run that search before reporting a capability as unavailable, and report one missing only when the search does not return it.");
+  // A turn that searched the registry then told the user the machine had no browser at all, without
+  // running one command, on a machine that had one. Evidence and host shape are both pinned here.
+  expect(transportOnly).toContain("Say only what a Codex Native result in this turn actually shows about this computer — what exists, what can run, and whether a change works. Run the check before you describe its outcome; when you have not run one, say you did not check instead of asserting what the machine has, lacks, or proves.");
+  expect(transportOnly).toContain("Match commands and paths to the operating system that the workspace paths in the task context identify. A probe written for a different operating system that finds nothing is not evidence of absence; retry it in the form this host expects before concluding anything is missing.");
   expect(transportOnly).toContain(`The task context is complete. Pass turn_token ${token} unchanged to every Codex Native call in this response, including continuations after tool results; do not expose it in the answer. Execute the latest active user request now.`);
   expect(transportOnly).not.toMatch(/codex_bind_turn|binding_id|outer_tool_gateway|command_tool/);
   expect(transportOnly).not.toMatch(/codex_exec|codex_write_stdin|codex_apply_patch|codex_view_image|codex_tool_inventory|codex_tool_call/);

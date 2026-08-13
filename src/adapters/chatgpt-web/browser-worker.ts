@@ -126,7 +126,7 @@ export async function throwIfChatGptRateLimitDialog(page: Page): Promise<void> {
   );
 }
 
-type ChatGptTextScope = Pick<Locator, "getByText">;
+type ChatGptTextScope = Pick<Locator, "getByText" | "locator">;
 
 const chatGptSessionFailureAlert = (page: Page): Locator => page
   .locator('[role="alert"]')
@@ -145,10 +145,21 @@ const chatGptTerminalErrorAlert = (scope: ChatGptTextScope): Locator => scope
   .getByText(/Something went wrong[\s\S]*help\.openai\.com/i)
   .last();
 
+/**
+ * ChatGPT's own response failure also renders a regenerate control, and its test id does not
+ * localise while the "Something went wrong" copy does. On a Vietnamese UI the copy never matched, so
+ * the failure went undetected and the turn died reporting a changed DOM instead of the real cause.
+ */
+const chatGptThreadErrorControl = (scope: ChatGptTextScope): Locator => scope
+  .locator('[data-testid="regenerate-thread-error-button"]')
+  .last();
+
 export async function throwIfChatGptTerminalErrorAlert(scope: ChatGptTextScope): Promise<void> {
-  if (!await chatGptTerminalErrorAlert(scope).isVisible().catch(() => false)) return;
+  const failed = await chatGptTerminalErrorAlert(scope).isVisible().catch(() => false)
+    || await chatGptThreadErrorControl(scope).isVisible().catch(() => false);
+  if (!failed) return;
   throw new ChatGptWebAdapterError(
-    "ChatGPT ended the turn with 'Something went wrong'. Retry the turn.",
+    "ChatGPT failed the response itself and offered to regenerate it. Retry the turn.",
     { status: 502, errorType: "server_error", code: "upstream_server_error", retryable: true },
   );
 }
@@ -755,6 +766,7 @@ export class ChatGptBrowserWorker {
   private managedBrowserReady?: Promise<{ browser: Browser; context: BrowserContext }>;
   private launcherHelper?: LauncherBrowserHelperClient;
   private maintenanceTail: Promise<void> = Promise.resolve();
+  private loggedSnapshotFault = false;
   private readonly activeRuns = new Map<string, Promise<string>>();
 
   private constructor(private readonly config: ResolvedBrowserConfig) {}
@@ -1682,7 +1694,10 @@ export class ChatGptBrowserWorker {
         const screenReaderText = [...candidate.querySelectorAll<HTMLElement>(".sr-only")]
           .map(element => element.textContent?.replace(/\s+/g, " ").trim() ?? "")
           .find(Boolean);
-        return screenReaderText || candidate.innerText.trim();
+        // `[role="status"]` and the `cot`/`reason` test ids also match inline SVG, which has no
+        // innerText. Reading it threw, the whole snapshot fell back to "no response", and the turn
+        // later died claiming ChatGPT never exposed a completed-turn action.
+        return screenReaderText || (candidate.innerText ?? candidate.textContent ?? "").trim();
       };
       const traceKey = (candidate: HTMLElement, kind: ChatGptVisibleTraceBlock["kind"]): string | undefined => {
         const statusContainer = candidate.closest<HTMLElement>("[data-streaming-response-status]");
@@ -1748,9 +1763,17 @@ export class ChatGptBrowserWorker {
         completionActionVisible: completionAction !== undefined,
         traceBlocks,
       };
-    }, CHATGPT_COMPLETION_ACTION_SELECTOR, { timeout: 2_000 }).catch(() => {
+    }, CHATGPT_COMPLETION_ACTION_SELECTOR, { timeout: 2_000 }).catch((error: unknown) => {
       if (responseTurn.page().isClosed()) {
         throw new Error("ChatGPT browser tab was closed; the Codex turn was terminated");
+      }
+      // Reading the DOM stays fail-soft, because a snapshot that races a re-render must not end the
+      // turn. But a fault inside the page function is a bug, not a race, and reporting it as "no
+      // response" hid it until the turn failed for an unrelated-sounding reason. Name it once.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!this.loggedSnapshotFault && !/Timeout .* exceeded/i.test(message)) {
+        this.loggedSnapshotFault = true;
+        console.warn(`[chatgpt-web] response DOM snapshot failed, treating the response as absent: ${message}`);
       }
       return absentResponseDomSnapshot();
     });
@@ -1776,10 +1799,13 @@ export class ChatGptBrowserWorker {
             testId: candidate.getAttribute("data-testid"),
             ariaLabelChars: candidate.getAttribute("aria-label")?.length ?? 0,
             titleChars: candidate.getAttribute("title")?.length ?? 0,
-            textChars: candidate.innerText.trim().length,
+            // ChatGPT's icons are inline SVG carrying role/aria-label, and SVGElement has no
+            // innerText, so reading it threw and the diagnostic reported its own TypeError instead
+            // of the DOM state — exactly when the DOM state is the only thing worth having.
+            textChars: (candidate.innerText ?? candidate.textContent ?? "").trim().length,
           }));
         return {
-          textChars: root.innerText.trim().length,
+          textChars: (root.innerText ?? root.textContent ?? "").trim().length,
           htmlChars: root.innerHTML.length,
           descriptors,
         };
@@ -1799,7 +1825,7 @@ export class ChatGptBrowserWorker {
             role: candidate.getAttribute("role"),
             testId: candidate.getAttribute("data-testid"),
             ariaLabelChars: candidate.getAttribute("aria-label")?.length ?? 0,
-            textChars: candidate.innerText.trim().length,
+            textChars: (candidate.innerText ?? candidate.textContent ?? "").trim().length,
           };
         })
     )).catch(() => [] as Array<Record<string, string | null>>);
