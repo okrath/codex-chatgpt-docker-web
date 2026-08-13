@@ -5,7 +5,7 @@ import {
   CHATGPT_LUNA_CHECKPOINT_MARKER,
   CHATGPT_LUNA_CHECKPOINT_MAX_TOKENS,
 } from "./rolling-checkpoint";
-import { buildFloorProcedureBlock } from "./procedure/floor-protocol";
+import { buildFloorProcedureBlock, chatGptFloorProcedureEnabled } from "./procedure/floor-protocol";
 
 export interface ChatGptWebPromptImage {
   ref: string;
@@ -258,7 +258,7 @@ export function compileChatGptWebPrompt(
    * Web turn gets the full sealed prose, with the Deliver section swapped for its tool-capable
    * variant when Codex Native tools are attached.
    */
-  const procedureContract = parsed._compactionRequest
+  const procedureContract = parsed._compactionRequest || !chatGptFloorProcedureEnabled()
     ? []
     : buildFloorProcedureBlock({ localTools: mode.localTools });
   const checkpointContract = captureLunaCheckpoint

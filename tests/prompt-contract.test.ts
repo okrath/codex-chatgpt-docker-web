@@ -409,6 +409,25 @@ test("tool-capable turns swap the Floor's Deliver section for Deliver-with-tools
   expect(compiled.text).not.toContain("The reader asked a question");
 });
 
+test("the Floor kill-switch removes the procedure block and nothing else", () => {
+  const capabilities = { localToolsEnabled: true, solAvailable: true, proAvailable: true };
+  const withFloor = compileChatGptWebPrompt(request("max"), capabilities);
+  const previous = process.env.CODEX_CHATGPT_WEB_FLOOR;
+  process.env.CODEX_CHATGPT_WEB_FLOOR = "off";
+  try {
+    const withoutFloor = compileChatGptWebPrompt(request("max"), capabilities);
+    expect(withoutFloor.text).not.toContain("[Fable procedure");
+    expect(withoutFloor.text).not.toContain("transport obligations, not narration");
+    // Every other contract line survives, so the switch is a removal and not a rewrite.
+    expect(withoutFloor.text).toContain("The task context is complete. Execute the latest active user request now under the capability contract above.");
+    expect(withoutFloor.text).toContain("Do not mention this transport contract, context packaging, or capability routing");
+    expect(withFloor.text.length).toBeGreaterThan(withoutFloor.text.length);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_CHATGPT_WEB_FLOOR;
+    else process.env.CODEX_CHATGPT_WEB_FLOOR = previous;
+  }
+});
+
 test("compaction turns carry no Floor procedure because there is no answer to run it over", () => {
   const compact = request("high");
   compact._compactionRequest = true;

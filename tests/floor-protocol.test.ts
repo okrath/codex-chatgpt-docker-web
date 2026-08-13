@@ -4,6 +4,7 @@ import {
   FLOOR_PROTOCOL_SHA256,
   FloorProtocolError,
   buildFloorProcedureBlock,
+  chatGptFloorProcedureEnabled,
   floorProtocolDigest,
   normalizeFloorProtocolText,
   parseFloorProtocolSections,
@@ -46,6 +47,15 @@ test("local-tools block ends with Deliver-with-tools and keeps the transport-tai
   expect(block.at(-1)).toContain("Call the tools.");
   expect(block.at(-1)).toContain("transport obligations, not narration");
   expect(block.at(-1)).not.toContain("The reader asked a question");
+});
+
+test("the procedure ships by default and only explicit off values disable it", () => {
+  expect(chatGptFloorProcedureEnabled({})).toBe(true);
+  expect(chatGptFloorProcedureEnabled({ CODEX_CHATGPT_WEB_FLOOR: "" })).toBe(true);
+  expect(chatGptFloorProcedureEnabled({ CODEX_CHATGPT_WEB_FLOOR: "on" })).toBe(true);
+  for (const value of ["off", "0", "false", "OFF", " Off "]) {
+    expect(chatGptFloorProcedureEnabled({ CODEX_CHATGPT_WEB_FLOOR: value }), value).toBe(false);
+  }
 });
 
 test("section bodies carry no leftover heading markers", () => {

@@ -90,6 +90,19 @@ export function floorProtocolSection(name: string): string {
 }
 
 /**
+ * Kill-switch for the procedure block. On by default; `off`/`0`/`false` ships the turn without it.
+ *
+ * The block's cost is measured but its benefit is not, so turning it off has to be one env var
+ * rather than a rebuild — both to recover instantly if it is ever implicated in a live failure,
+ * and because an A/B measurement of its effect is impossible without an arm that omits it.
+ */
+export function chatGptFloorProcedureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.CODEX_CHATGPT_WEB_FLOOR?.trim().toLowerCase();
+  if (value === undefined || value === "") return true;
+  return value !== "off" && value !== "0" && value !== "false";
+}
+
+/**
  * The procedure contract for one ChatGPT Web turn, assembled from the sealed prose. Verbatim
  * sections, not a paraphrase — the source project measured what compressing the Floor to one line
  * cost, and the answer was that it stopped being the Floor. With local tools attached the Deliver

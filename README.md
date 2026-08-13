@@ -204,9 +204,9 @@ Honest accounting: the cost is measured — **592 tokens per read-only turn, 667
 tools** (~2.1–2.4% of the Free ~28k budget) — and the benefit is not: the source
 project itself records "whether the Floor earns its tokens" as untested, and this fork
 has verified only that the block does not break turns (live smoke: checkpoint tail and
-rolling context survive, zero procedure narration in answers). Removing it is a single
-revert of the block insertion in
-[src/adapters/chatgpt-web/prompt.ts](src/adapters/chatgpt-web/prompt.ts).
+rolling context survive, zero procedure narration in answers). Turn it off with
+`CODEX_CHATGPT_WEB_FLOOR=off` (in `docker-compose.yml` or the environment) — that is both
+the kill-switch and the control arm for measuring whether it helps.
 
 ## What this fork changes
 
