@@ -169,6 +169,84 @@ Kiểm tra sức khỏe bất cứ lúc nào:
 docker compose exec codex-chatgpt-web codex-chatgpt-web doctor
 ```
 
+## 5b. Vận hành hằng ngày (bật / tắt / xem trạng thái)
+
+Mọi lệnh chạy tại thư mục repo này.
+
+```bash
+docker compose up -d codex-chatgpt-web      # bật (build lại nếu thêm --build)
+```
+
+```bash
+docker compose stop codex-chatgpt-web       # tắt, GIỮ container + dữ liệu
+```
+
+```bash
+docker compose restart codex-chatgpt-web    # khởi động lại (áp dụng đổi env/route)
+```
+
+```bash
+docker compose ps                           # trạng thái + healthy hay chưa
+```
+
+```bash
+docker compose logs -f --tail 100 codex-chatgpt-web   # log realtime
+```
+
+Ba mức "tắt", chọn đúng cái bạn cần:
+
+| Lệnh | Container | Volume (phiên đăng nhập) | Route trong `~/.codex/config.toml` |
+| --- | --- | --- | --- |
+| `stop` | dừng, còn nguyên | giữ | **giữ** — Codex vẫn trỏ vào bridge, gọi model sẽ lỗi khi container tắt |
+| `down` | xoá container | giữ | **giữ** |
+| `down -v` | xoá container | **xoá** (phải đăng nhập lại) | **giữ** |
+
+> Vì route vẫn nằm trong config sau khi tắt, muốn **dùng model thường** thì phải gỡ route —
+> xem mục 5c. Chỉ tắt container là chưa đủ.
+
+Vài điều nên biết:
+
+- Compose đặt `restart: unless-stopped`. Tắt bằng `stop` thì mở lại Docker Desktop **không**
+  tự bật lại; nếu container đang chạy mà máy khởi động lại thì nó **tự bật**.
+- Healthcheck gọi `/healthz` mỗi 30 giây, với `start_period` 15 phút để chừa thời gian
+  đăng nhập lần đầu — nên `health: starting` ngay sau lần boot đầu là bình thường.
+- Cả hai cổng chỉ bind vào máy bạn: `127.0.0.1:17841` (bridge) và `127.0.0.1:7900` (noVNC).
+- Dữ liệu nằm ở volume `codex-chatgpt-web-home` → `/root/.codex-chatgpt-web` trong container:
+  config, phiên đăng nhập ChatGPT, log, và `diagnostics/browser-turns/<trace>-<id>/` (ảnh +
+  JSON trạng thái DOM từng bước của mỗi turn — rất hữu ích khi báo lỗi).
+- Kiểm tra tổng thể bất cứ lúc nào:
+
+  ```bash
+  docker compose exec codex-chatgpt-web codex-chatgpt-web doctor
+  ```
+
+## 5c. Tạm ngưng bridge để dùng model thường — và nối lại
+
+Route là **một dòng `openai_base_url`** trong `~/.codex/config.toml` trỏ toàn bộ traffic
+OpenAI của Codex vào bridge. Còn dòng đó thì mọi model (kể cả `gpt-5.6-sol`) đều đi qua
+container; container tắt là hỏng.
+
+```bash
+docker compose exec codex-chatgpt-web codex-chatgpt-web route status
+```
+
+```bash
+docker compose exec codex-chatgpt-web codex-chatgpt-web route disconnect
+```
+
+```bash
+docker compose exec codex-chatgpt-web codex-chatgpt-web route connect
+```
+
+- `disconnect` gỡ `openai_base_url` **và** các flag mà setup từng đặt
+  (`remote_compaction_v2`, `multi_agent`, `multi_agent_v2`), theo journal riêng — nên sửa
+  tay sẽ bỏ sót. `connect` đặt lại y nguyên, không phải cài lại từ đầu.
+- Container **phải đang chạy** thì mới exec được. Nếu đã tắt: `up -d` → `route disconnect`
+  → `stop`.
+- **Thoát hẳn app Codex rồi mở lại** sau mỗi lần đổi route (đóng cửa sổ là chưa đủ).
+- Sau `disconnect`, `route status` báo `installed: true, active: false` — đúng như vậy:
+  vẫn còn cài, chỉ đang không nối.
+
 ## 6. Sự cố thường gặp
 
 | Hiện tượng | Nguyên nhân | Cách xử lý |
@@ -380,3 +458,76 @@ giám sát tunnel; muốn khởi động lại thì restart container.
 - **Không đổi cổng host `17841`** — Codex được trỏ cứng vào `http://127.0.0.1:17841/v1`.
 - Cả 2 cổng (17841, 7900) chỉ bind vào `127.0.0.1` của máy bạn, không lộ ra mạng LAN.
 - Volume `codex-chatgpt-web-home` chứa phiên đăng nhập ChatGPT — nhạy cảm, đừng chia sẻ.
+
+## 10b. Bảng setting đầy đủ (biến môi trường)
+
+Đặt trong khối `environment:` của `docker-compose.yml`, hoặc thêm vào trước lệnh khi bật:
+
+```bash
+CODEX_CHATGPT_WEB_LUNA_PRELOAD=off docker compose up -d codex-chatgpt-web
+```
+
+PowerShell không có cú pháp tiền tố đó — dùng `$env:TÊN = "giá trị"` rồi mới chạy lệnh.
+Đổi biến xong phải `up -d` lại (hoặc `restart`) thì container mới đọc giá trị mới.
+
+| Biến | Mặc định | Ý nghĩa |
+| --- | --- | --- |
+| `REPLACE_CODEX_ROUTE` | `0` | Đặt `1` cho lần boot đầu nếu `~/.codex/config.toml` đã có sẵn `openai_base_url` khác; setup sẽ thay thế **có thể hoàn tác** |
+| `CODEX_CHATGPT_WEB_LUNA_PRELOAD` | `on` | Turn vượt trần được chia thành nhiều tin nhắn thay vì gộp mất mát (mục 8b). `off` để tắt |
+| `CODEX_CHATGPT_WEB_LUNA_PRELOAD_MAX_PARTS` | `3` | Số phần tối đa khi preload. Free ngừng phản hồi sau ~3 tin nhắn gửi nhanh — chỉ tăng khi test |
+| `CODEX_CHATGPT_WEB_LUNA_PRELOAD_TIMEOUT_MS` | `180000` | Hạn chờ xác nhận mỗi phần preload (tối thiểu 5000). Hạ xuống để test nhánh thất bại |
+| `CODEX_CHATGPT_WEB_LUNA_BUDGET_OVERRIDE` | trống (28k thật) | Hạ ngưỡng kích hoạt slimming/preload (tối thiểu 1000) để test trên thread ngắn. **Không bao giờ nâng được** trần thật |
+| `CODEX_CHATGPT_WEB_LUNA_TRIM_RULES` | 5 section mặc định | Danh sách `## Rule:` bị cắt, cách nhau dấu phẩy; `off` để tắt hẳn slimming (mục 8, 8d) |
+| `CODEX_CHATGPT_WEB_BROWSER_DIAGNOSTICS` | tắt | `1` = chụp diagnostic ở **mọi** checkpoint, không chỉ khi lỗi. Tốn dung lượng, chỉ bật khi đang truy lỗi |
+| `CODEX_CHATGPT_WEB_HOME` | `~/.codex-chatgpt-web` | Đổi thư mục dữ liệu. Trong container đã trỏ vào volume — đừng đổi trừ khi chạy ngoài Docker |
+
+Setting **không** nằm ở biến môi trường mà ở lệnh `setup` (xem 10c): chế độ
+browser-only/full, cổng, tên connector, tunnel id, auto-approve tool call.
+
+## 10c. Lệnh CLI đầy đủ
+
+Chạy trong container: `docker compose exec codex-chatgpt-web codex-chatgpt-web <lệnh>`
+(thêm `-it` khi lệnh cần nhập liệu, ví dụ `tunnel key-import`).
+
+| Lệnh | Dùng khi nào |
+| --- | --- |
+| `setup --browser-only [options]` | Cài/chuyển về chế độ chỉ đọc ngữ cảnh, không tool cục bộ |
+| `setup --full --tunnel-id ID …` | Chuyển sang full mode có tool cục bộ (mục 9) |
+| `login` | Phiên ChatGPT hết hạn hoặc đổi tài khoản; đăng nhập qua noVNC |
+| `doctor [--json]` | Báo cáo sức khoẻ tổng thể: route, login, tunnel, service |
+| `route <status\|connect\|disconnect>` | Nối/ngưng route trong `~/.codex/config.toml` (mục 5c) |
+| `browser check` | Kiểm tra Chromium trong container mở được không |
+| `serve` | Chạy bridge ở tiền cảnh (entrypoint đã tự làm) |
+| `mcp [--broker-socket PATH]` | Tiến trình MCP phục vụ connector (bridge tự gọi) |
+| `service <status\|install\|start\|restart\|stop\|cancel-turns>` | Quản lý daemon; `cancel-turns` huỷ mọi browser turn đang treo |
+| `tunnel <status\|key-import>` | Trạng thái tunnel, nhập runtime key. `start/stop/restart` bị chặn trong container — restart container thay thế |
+| `open <tunnels\|runtime-keys\|connectors>` | Mở trang cấu hình tương ứng trên OpenAI/ChatGPT |
+| `uninstall --yes` | Gỡ toàn bộ tích hợp khỏi Codex |
+
+Cờ `setup` hay dùng: `--port` (mặc định 17841), `--app-name` (tên connector), `--login`
+(làm mới đăng nhập), `--refresh-account-capabilities` (đọc lại gói tài khoản sau khi nâng
+cấp), `--auto-approve-tool-calls` (tự bấm "Allow once"), `--replace-codex-route`,
+`--acknowledge-unofficial` (bắt buộc một lần).
+
+## 10d. Đọc log: các dấu hiệu quan trọng
+
+```bash
+docker compose logs --tail 200 codex-chatgpt-web | grep "chatgpt-web]"
+```
+
+| Dòng log | Nghĩa |
+| --- | --- |
+| `browser turn <id> opened (promptChars=…, estimatedInputTokens=…)` | Turn bắt đầu; con số token thật để đối chiếu trần 28k |
+| `stage=… completed durationMs=…` | Từng bước: chuẩn bị chat → chọn effort → gắn connector → gửi |
+| `broker claim received (tokenChars=37, valid=true)` | Model gọi tool cục bộ với token hợp lệ |
+| `valid=true, recoveredTypo=N` | Model gõ sai token N ký tự, bridge **tự sửa** — không mất turn |
+| `valid=false, …, liveTurns=0` | Không còn turn nào sống → bridge đã restart giữa lượt; gửi thêm một tin nhắn |
+| `valid=false, …, liveTurns=1` | Bản copy hỏng quá nặng; model được yêu cầu đọc lại token và gọi lại |
+| `keeping the N block(s) Codex received` | Model viết lại đoạn đã stream; phần viết lại bị bỏ, **turn vẫn sống** |
+| `response DOM snapshot failed …` | Lỗi trong hàm đọc DOM (không phải "ChatGPT chưa trả lời") — kèm nguyên văn lỗi |
+| `Luna rolling checkpoint applied=true replacedHistory=N` | Đã thay N message cũ bằng checkpoint cuộn |
+| `could not recover its rolling checkpoint` | Luna quên checkpoint và hỏi lại cũng không được — turn sẽ hỏng |
+| `turn failed: …` | Lý do turn hỏng, nguyên văn |
+
+Trong trace của **app Codex** (không phải log container): dòng `✂️` nghĩa là slimming vừa
+cứu một turn quá khổ, dòng `📨` cho biết turn bị chia làm mấy phần preload.
